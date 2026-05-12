@@ -19,6 +19,7 @@ import streamlit as st
 
 import modules.state.keys as K
 from modules.state.defaults import DEFAULTS
+from modules.state.persist import read, mirror
 
 # Orden canónico del flujo biológico
 ALL_STAGES: list[str] = ["cria", "recria", "eng_int"]
@@ -45,8 +46,13 @@ _KG_OUT_KEY: dict[str, tuple[str, float]] = {
 
 
 def is_active(stage: str) -> bool:
-    """True si la etapa está activada en el modelo."""
-    return bool(st.session_state.get(_TOGGLE_KEY[stage], True))
+    """True si la etapa está activada en el modelo.
+
+    Lectura robusta: shadow > widget-key > True (default cuando es la
+    primera vez que se accede). Esto garantiza que la activación
+    sobreviva la navegación entre slides.
+    """
+    return bool(read(_TOGGLE_KEY[stage], True))
 
 
 def active_stages() -> list[str]:
@@ -75,17 +81,17 @@ def kg_in_for(stage: str) -> float:
     """
     if is_first_active(stage):
         key, dflt = _KG_ENTRADA_KEY[stage]
-        return float(st.session_state.get(key, dflt))
+        return float(read(key, dflt))
     idx = ALL_STAGES.index(stage)
     prev_stage = ALL_STAGES[idx - 1]
     key, dflt = _KG_OUT_KEY[prev_stage]
-    return float(st.session_state.get(key, dflt))
+    return float(read(key, dflt))
 
 
 def kg_out_for(stage: str) -> float:
     """Peso de salida de la etapa (= kg vendidos / pasados a la siguiente)."""
     key, dflt = _KG_OUT_KEY[stage]
-    return float(st.session_state.get(key, dflt))
+    return float(read(key, dflt))
 
 
 def enforce_contiguity() -> None:
@@ -93,10 +99,26 @@ def enforce_contiguity() -> None:
 
     El único patrón inválido posible (con 3 etapas) es Cría=ON, Engorde=ON,
     Recría=OFF. En ese caso se prende Recría para mantener un slice contiguo.
+
+    Debe llamarse ANTES de instanciar los checkboxes del rerun actual:
+    una vez instanciado un widget, Streamlit prohíbe escribir a su key
+    (StreamlitAPIException).
+
+    Lee vía `read()` (shadow > ss > default). El shadow es la fuente de
+    verdad bajo el nuevo patrón de `_num`/checkboxes con widget-key
+    separado: el `on_change` lo actualiza inmediatamente cuando el
+    usuario hace click, así que `read()` siempre refleja la última
+    selección. Escribimos en ambos (mirror al shadow + ss para back-compat).
     """
-    if (is_active("cria") and is_active("eng_int")
-            and not is_active("recria")):
-        st.session_state[K.STAGE_RECRIA_ON] = True
+    cria   = bool(read(K.STAGE_CRIA_ON,   True))
+    recria = bool(read(K.STAGE_RECRIA_ON, True))
+    eng    = bool(read(K.STAGE_ENG_ON,    True))
+    if cria and eng and not recria:
+        mirror(K.STAGE_RECRIA_ON, True)
+        try:
+            st.session_state[K.STAGE_RECRIA_ON] = True
+        except Exception:
+            pass
 
 
 def mode_label() -> str:

@@ -17,7 +17,9 @@ import plotly.graph_objects as go
 
 import modules.state.keys as K
 import modules.state.stages as S
+import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
+from modules.state.persist import read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -37,7 +39,8 @@ _SEG = {
 
 
 def _g(key: str, default: float) -> float:
-    return float(st.session_state.get(key, default))
+    """Lectura robusta: shadow > widget-key > default."""
+    return float(read(key, default))
 
 
 # ── Modelo comercial ─────────────────────────────────────────────────────────
@@ -59,21 +62,21 @@ def _build_ingresos() -> dict:
     # ── Cría ──────────────────────────────────────────────────────────────
     a_kg_in   = S.kg_in_for("cria")
     a_kg_out  = S.kg_out_for("cria")
-    a_dias    = int(_g(K.A_DIAS,          DEFAULTS["d_dias"]))
+    a_dias    = D.dias_for("cria")
     a_mort    = _g(K.A_MORTALIDAD,        DEFAULTS["d_mortalidad"])
     a_pv      = _g(K.A_PRECIO_VENTA,      DEFAULTS["d_precio_venta"])
 
     # ── Recría ────────────────────────────────────────────────────────────
     b_kg_in   = S.kg_in_for("recria")
     b_kg_out  = S.kg_out_for("recria")
-    b_dias    = int(_g(K.B_DIAS,          DEFAULTS["b_dias"]))
+    b_dias    = D.dias_for("recria")
     b_mort    = _g(K.B_MORTALIDAD,        DEFAULTS["r_mortalidad"])
     b_pv      = _g(K.B_PRECIO_VENTA,      DEFAULTS["r_precio_venta"])
 
     # ── Engorde ────────────────────────────────────────────────────────────
     c_kg_in   = S.kg_in_for("eng_int")
     c_kg_out  = S.kg_out_for("eng_int")
-    c_dias    = int(_g(K.C_DIAS,          DEFAULTS["c_dias"]))
+    c_dias    = D.dias_for("eng_int")
     c_mort    = _g(K.C_MORTALIDAD,        DEFAULTS["t_mortalidad"])
     c_pv      = _g(K.C_PRECIO_VENTA,      DEFAULTS["t_precio_venta"])
 

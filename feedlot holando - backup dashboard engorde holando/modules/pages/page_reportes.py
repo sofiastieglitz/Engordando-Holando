@@ -1,15 +1,9 @@
 """
-Reportes — One Pager ejecutivo (estructura visual inicial).
+Reportes — One Pager ejecutivo (formato A4).
 
-Esta página construye el shell visual de un reporte ejecutivo estilo A4
-dentro del dashboard. Por ahora expone:
-  - inputs editables (empresa, responsable, fecha) persistidos en session_state,
-  - checkbox para incluir/ocultar el logo,
-  - header ejecutivo (logo izquierda · datos derecha),
-  - título + subtítulo del reporte,
-  - placeholder del cuerpo del reporte.
-
-NO genera PDF ni habilita descargas (etapa posterior).
+Snapshot de la simulación activa: contexto + margen total + cards por etapa
+activa + tabla de detalle productivo y económico + bloque de riesgo. Refleja
+dinámicamente la selección de etapas hecha en Parámetros.
 """
 from __future__ import annotations
 from datetime import date
@@ -19,15 +13,27 @@ import streamlit as st
 
 import modules.state.keys as K
 from modules.state.defaults import DEFAULTS
+from modules.state import stages as S
+from modules.state.persist import mirror_current, read
 from modules.pages.ui import page_header
-from modules.pages import page_modelo_productivo as mp
 from modules.pages import page_costos as cp
-from modules.pages import page_ingresos as ip
 from modules.pages import page_margenes as pm
 from modules.pages import page_sensibilidad as ps
 
 if TYPE_CHECKING:
     from modules.economics.comparador import Comparador
+
+
+# ── Metadatos por etapa (mismos colores que las otras slides) ────────────────
+
+_STAGE_META: dict[str, dict] = {
+    "cria":    {"title": "Cría",    "icon": "🌱", "color": "#16a34a",
+                "bg": "#f0fdf4", "border": "#bbf7d0"},
+    "recria":  {"title": "Recría",  "icon": "🔵", "color": "#1565c0",
+                "bg": "#eff6ff", "border": "#bfdbfe"},
+    "eng_int": {"title": "Engorde", "icon": "🟢", "color": "#0d9488",
+                "bg": "#f0fdfa", "border": "#99f6e4"},
+}
 
 
 # ── Session state keys ──────────────────────────────────────────────────────
@@ -79,6 +85,13 @@ def _render_editor() -> None:
         st.markdown("<div style='height:28px'></div>",
                     unsafe_allow_html=True)
         st.checkbox("Incluir logo", key=_K_LOGO)
+
+    # Espejar los valores al shadow store para que sobrevivan la
+    # navegación a otras slides.
+    mirror_current(_K_EMPRESA)
+    mirror_current(_K_RESPONSABLE)
+    mirror_current(_K_FECHA)
+    mirror_current(_K_LOGO)
 
     st.markdown(
         '<div style="height:6px;border-bottom:1px dashed #e4eaf4;'
@@ -170,7 +183,7 @@ def _title_html() -> str:
     )
 
 
-# ── 5. Resumen ejecutivo (estrategia recomendada + 5 KPIs) ──────────────────
+# ── 5. Helpers de color (riesgo / robustez) ─────────────────────────────────
 
 def _risk_color(score: float) -> str:
     """Mayor riesgo = peor (rojo); menor = verde."""
@@ -186,503 +199,372 @@ def _robust_color(score: float) -> str:
     return "#dc2626"
 
 
-def _kpi_card_html(icon: str, label: str, value: str,
-                    value_color: str = "#0c1a2e",
-                    subtext: str = "") -> str:
-    sub_html = (
-        f'<div style="font-size:0.58rem;color:#94a3b8;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:0.05em;margin-top:3px;'
-        f'line-height:1;">{subtext}</div>'
-        if subtext else ''
-    )
+def _hero_margen_html(margen_total: float, active_keys: list[str],
+                       n_terneros: int, dias_total: int) -> str:
+    """Hero principal: MARGEN TOTAL DEL SISTEMA en grande."""
+    color_tot = "#16a34a" if margen_total >= 0 else "#dc2626"
+    sign = "+" if margen_total >= 0 else "−"
+    accent = "#1565c0"
+
+    pretty = " · ".join(
+        f'<span style="color:{_STAGE_META[k]["color"]};">'
+        f'{_STAGE_META[k]["icon"]} {_STAGE_META[k]["title"]}</span>'
+        for k in active_keys
+    ) or "—"
+
     return (
-        f'<div style="flex:1;background:white;border:1px solid #e4eaf4;'
-        f'border-radius:10px;padding:13px 12px;text-align:center;'
-        f'box-shadow:0 1px 4px rgba(13,27,66,0.05);min-width:0;">'
-        f'<div style="font-size:1.05rem;line-height:1;margin-bottom:4px;">'
-        f'{icon}</div>'
-        f'<div style="font-size:0.56rem;color:#7a8fa6;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:0.06em;'
-        f'margin-bottom:5px;line-height:1.1;'
-        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-        f'{label}</div>'
-        f'<div style="font-size:1.02rem;font-weight:800;color:{value_color};'
-        f'line-height:1.1;font-variant-numeric:tabular-nums;'
-        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-        f'{value}</div>'
-        f'{sub_html}'
+        f'<div style="background:linear-gradient(135deg,{accent}10,{accent}03);'
+        f'border:2px solid {accent}40;border-radius:14px;'
+        f'padding:26px 30px;margin-top:18px;text-align:center;">'
+        f'<div style="font-size:0.66rem;color:{accent};font-weight:800;'
+        f'text-transform:uppercase;letter-spacing:0.18em;margin-bottom:8px;">'
+        f'Margen total del sistema</div>'
+        f'<div style="font-size:3.0rem;font-weight:800;color:{color_tot};'
+        f'line-height:1;letter-spacing:-0.04em;'
+        f'font-variant-numeric:tabular-nums;margin:6px 0 8px;">'
+        f'{sign}USD {abs(margen_total):,.0f}</div>'
+        f'<div style="font-size:0.85rem;color:#475569;line-height:1.4;'
+        f'margin-top:4px;">{pretty}</div>'
+        f'<div style="font-size:0.72rem;color:#94a3b8;line-height:1.4;'
+        f'margin-top:3px;">{n_terneros:,} cab · {dias_total} días totales</div>'
         f'</div>'
     )
 
 
-def _executive_summary_html() -> str:
-    """Resumen ejecutivo del sistema productivo integrado.
+def _simulation_context_html(active_keys: list[str], n_terneros: int) -> str:
+    """Franja con contexto identificatorio de la simulación."""
+    empresa     = (st.session_state.get(_K_EMPRESA, "") or "—").strip() or "—"
+    responsable = (st.session_state.get(_K_RESPONSABLE, "") or "—").strip() or "—"
+    fecha_str   = _format_date(st.session_state.get(_K_FECHA, date.today()))
 
-    Agrega margen, USD/cab/día, riesgo y robustez a nivel sistema
-    promediando entre las etapas (cría · recría · engorde) y muestra
-    el margen total como headline del hero."""
-    marg = pm._build_margenes()
-    sens = ps._build_sensibilidad()
-    risk_rows = ps._build_risk_return(sens)
-    risk_by_key = {r["key"]: r for r in risk_rows}
-
-    margen_total = sum(marg[k]["margen_bruto_total"] for k in _STAGES_KEYS)
-    n = len(_STAGES_KEYS)
-    usd_cab_dia_avg = sum(marg[k]["usd_cab_dia"] for k in _STAGES_KEYS) / n
-    riesgo_avg = sum(risk_by_key[k]["risk_composite"]
-                     for k in _STAGES_KEYS) / n
-    robustez_avg = sum(risk_by_key[k]["robustness"]
-                       for k in _STAGES_KEYS) / n
-
-    color = "#1565c0"
-    margen_color = "#16a34a" if margen_total >= 0 else "#dc2626"
-    margen_sign = "+" if margen_total >= 0 else "−"
-
-    title_html = (
-        '<span style="color:#16a34a;">🌱 Cría</span>'
-        ' <span style="color:#94a3b8;font-weight:600;font-size:0.85em;">+</span> '
-        '<span style="color:#1565c0;">🔵 Recría</span>'
-        ' <span style="color:#94a3b8;font-weight:600;font-size:0.85em;">+</span> '
-        '<span style="color:#0d9488;">🟢 Engorde</span>'
-    )
-
-    hero = (
-        f'<div style="background:linear-gradient(135deg,{color}1a,{color}05);'
-        f'border:2px solid {color}55;border-radius:12px;'
-        f'padding:18px 22px;margin-top:18px;'
-        f'display:flex;align-items:center;justify-content:space-between;'
-        f'gap:16px;flex-wrap:wrap;">'
-        f'<div style="min-width:0;">'
-        f'<div style="font-size:0.62rem;color:{color};font-weight:800;'
-        f'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:5px;">'
-        f'Sistema productivo integrado</div>'
-        f'<div style="font-size:1.40rem;font-weight:800;color:#0c1a2e;'
-        f'line-height:1.15;letter-spacing:-0.01em;">{title_html}</div>'
-        f'</div>'
-        f'<div style="text-align:right;flex-shrink:0;">'
-        f'<div style="font-size:0.60rem;color:#94a3b8;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:0.06em;">Margen total</div>'
-        f'<div style="font-size:1.85rem;font-weight:800;color:{margen_color};'
-        f'line-height:1;letter-spacing:-0.02em;">'
-        f'{margen_sign}USD {abs(margen_total):,.0f}</div>'
-        f'</div></div>'
-    )
-
-    cards = (
-        _kpi_card_html(
-            "💵", "Margen sistema",
-            f"{margen_sign}USD {abs(margen_total):,.0f}",
-            margen_color, "USD totales",
-        )
-        + _kpi_card_html(
-            "⚡", "USD / cab / día",
-            f"USD {usd_cab_dia_avg:.2f}",
-            subtext="promedio etapas",
-        )
-        + _kpi_card_html(
-            "⚠", "Riesgo",
-            f"{riesgo_avg:.0f}/100",
-            _risk_color(riesgo_avg),
-            subtext="promedio etapas",
-        )
-        + _kpi_card_html(
-            "🛡", "Robustez",
-            f"{robustez_avg:.0f}/100",
-            _robust_color(robustez_avg),
-            subtext="promedio etapas",
-        )
-    )
-
-    cards_block = (
-        f'<div style="display:flex;gap:8px;margin-top:14px;'
-        f'flex-wrap:nowrap;">{cards}</div>'
-    )
-
-    return hero + cards_block
-
-
-# ── Helpers SVG (gráficos inline dentro del A4) ─────────────────────────────
-
-def _svg_sparkline(xs: list[float], ys: list[float],
-                    width: int = 240, height: int = 56,
-                    color: str = "#1565c0",
-                    show_dots: bool = True) -> str:
-    """Genera una sparkline SVG con relleno suave bajo la línea."""
-    if not xs or not ys or len(xs) != len(ys):
-        return ""
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    if x_max == x_min: x_max = x_min + 1
-    if y_max == y_min: y_max = y_min + 1
-    pad = 5
-
-    def sx(x: float) -> float:
-        return pad + (x - x_min) / (x_max - x_min) * (width - 2 * pad)
-
-    def sy(y: float) -> float:
-        return height - pad - (y - y_min) / (y_max - y_min) * (height - 2 * pad)
-
-    pts = " ".join(f"{sx(x):.1f},{sy(y):.1f}" for x, y in zip(xs, ys))
-    area_pts = (
-        pts +
-        f" {sx(xs[-1]):.1f},{height - pad:.1f}"
-        f" {sx(xs[0]):.1f},{height - pad:.1f}"
-    )
-    dots = ""
-    if show_dots:
-        for x, y in zip(xs, ys):
-            dots += (
-                f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="2.5" '
-                f'fill="white" stroke="{color}" stroke-width="1.5" />'
-            )
-    return (
-        f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" '
-        f'preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
-        f'<polygon points="{area_pts}" fill="{color}" fill-opacity="0.16" />'
-        f'<polyline points="{pts}" fill="none" stroke="{color}" '
-        f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />'
-        f'{dots}'
-        f'</svg>'
-    )
-
-
-def _hbars_html(items: list[tuple[str, float]],
-                color: str = "#fb7185",
-                top_n: int = 4) -> str:
-    """Mini barras horizontales: lista (label, valor)."""
-    if not items:
-        return ""
-    items_sorted = sorted(items, key=lambda x: -x[1])[:top_n]
-    max_val = max(v for _, v in items_sorted) or 1.0
-    rows = ""
-    for label, val in items_sorted:
-        pct = max(0.0, val / max_val * 100)
-        rows += (
-            f'<div style="display:flex;align-items:center;gap:6px;'
-            f'margin-bottom:4px;font-size:0.66rem;line-height:1;">'
-            f'<span style="flex:0 0 78px;color:#475569;font-weight:600;'
-            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-            f'{label}</span>'
-            f'<div style="flex:1;background:#eef2f7;height:6px;'
-            f'border-radius:3px;overflow:hidden;">'
-            f'<div style="background:{color};height:100%;'
-            f'width:{pct:.1f}%;border-radius:3px;"></div></div>'
-            f'<span style="flex:0 0 58px;color:#0c1a2e;font-weight:700;'
-            f'text-align:right;font-variant-numeric:tabular-nums;">'
-            f'{val:,.0f}</span></div>'
-        )
-    return rows
-
-
-def _mini_block_html(accent_color: str, icon: str, title: str,
-                      bullets: list[str], chart_html: str) -> str:
-    """Card compacta: header de color + bullets + mini chart."""
-    bullets_html = "".join(
-        f'<li style="font-size:0.74rem;color:#0c1a2e;'
-        f'margin-bottom:4px;line-height:1.35;list-style:none;'
-        f'padding-left:11px;position:relative;">'
-        f'<span style="position:absolute;left:0;top:0;color:{accent_color};'
-        f'font-weight:800;font-size:0.85rem;line-height:1.1;">•</span>'
-        f'{b}</li>'
-        for b in bullets
-    )
-    return (
-        f'<div style="background:white;border:1px solid #e4eaf4;'
-        f'border-top:3px solid {accent_color};border-radius:10px;'
-        f'padding:13px 14px;box-shadow:0 1px 4px rgba(13,27,66,0.05);'
-        f'display:flex;flex-direction:column;height:100%;">'
-        f'<div style="font-size:0.62rem;font-weight:800;color:{accent_color};'
-        f'text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;'
-        f'display:flex;align-items:center;gap:5px;">{icon} {title}</div>'
-        f'<ul style="padding:0;margin:0 0 8px 0;">{bullets_html}</ul>'
-        f'<div style="margin-top:auto;">{chart_html}</div>'
-        f'</div>'
-    )
-
-
-# ── Mini-bloque: Modelo Productivo ──────────────────────────────────────────
-
-def _modelo_productivo_mini_html() -> str:
-    ms = mp._read_stages()
-    t_a = ms["cria"]["dias"]
-    t_b = t_a + ms["recria"]["dias"]
-    t_c = t_b + ms["eng_int"]["dias"]
-
-    kg_birth = ms["cria"]["kg_in"]
-    kg_final = ms["eng_int"]["kg_out"]
-
-    dias_totales = t_c
-    gdp_avg = ((kg_final - kg_birth) / dias_totales
-               if dias_totales > 0 else 0.0)
-
-    bullets = [
-        f"<b>{dias_totales}</b> días totales del ciclo",
-        f"<b>{kg_final:.0f} kg</b> peso final",
-        f"GDP promedio <b>{gdp_avg:.3f} kg/día</b>",
-    ]
-
-    xs = [0, t_a, t_b, t_c]
-    ys = [
-        kg_birth,
-        ms["cria"]["kg_out"],
-        ms["recria"]["kg_out"],
-        ms["eng_int"]["kg_out"],
-    ]
-    chart = _svg_sparkline(xs, ys, color="#1565c0")
-    return _mini_block_html("#1565c0", "🐂", "Modelo productivo",
-                             bullets, chart)
-
-
-# ── Mini-bloque: Costos ─────────────────────────────────────────────────────
-
-_CONCEPT_LABELS = {
-    "compra":    "Compra",
-    "alim":      "Alimentación",
-    "sanidad":   "Sanidad",
-    "mortandad": "Mortandad",
-    "mo":        "Operación",
-    "com":       "Comercial.",
-}
-
-
-def _costos_mini_html() -> str:
-    co = cp._build_costos()
-    concepts = list(_CONCEPT_LABELS.keys())
-
-    # Sumas por concepto a nivel sistema (todos los stages × cabezas)
-    totals = {c: sum(co[k][c] * co[k]["cabezas"]
-                     for k in ("cria", "recria", "eng_int"))
-              for c in concepts}
-    total_sum = sum(totals.values())
-
-    sum_total = sum(co[k]["total_usd"]
-                    for k in ("cria", "recria", "eng_int"))
-    sum_cab = sum(co[k]["cabezas"]
-                  for k in ("cria", "recria", "eng_int"))
-    costo_cab_avg = sum_total / sum_cab if sum_cab > 0 else 0.0
-
-    if total_sum > 0:
-        top_driver = max(totals, key=totals.get)
-        top_pct = totals[top_driver] / total_sum * 100
-        driver_text = (f"Driver principal: "
-                       f"<b>{_CONCEPT_LABELS[top_driver]} "
-                       f"({top_pct:.0f}%)</b>")
+    if not active_keys:
+        etapas_str = "—"
     else:
-        driver_text = "Driver principal: <b>—</b>"
+        etapas_str = " + ".join(_STAGE_META[k]["title"] for k in active_keys)
 
-    bullets = [
-        f"USD <b>{costo_cab_avg:,.0f}/cab</b> (promedio sistema)",
-        driver_text,
-        f"USD <b>{sum_total:,.0f}</b> costo total del sistema",
+    items = [
+        ("Empresa",      empresa),
+        ("Responsable",  responsable),
+        ("Fecha",        fecha_str),
+        ("Etapas",       etapas_str),
+        ("Cabezas",      f"{n_terneros:,}"),
     ]
-
-    items = [(_CONCEPT_LABELS[c], totals[c]) for c in concepts]
-    chart = _hbars_html(items, color="#fb7185", top_n=4)
-    return _mini_block_html("#dc2626", "💸", "Costos", bullets, chart)
-
-
-# ── Mini-bloque: Ingresos ───────────────────────────────────────────────────
-
-def _ingresos_mini_html() -> str:
-    ing = ip._build_ingresos()
-    pc = float(st.session_state.get(K.COMERCIAL_PRECIO_COMPRA,
-                                     DEFAULTS["precio_compra"]))
-
-    sum_total = sum(ing[k]["ingreso_total"]
-                    for k in ("cria", "recria", "eng_int"))
-    sum_cab_vend = sum(ing[k]["cab_vend"]
-                       for k in ("cria", "recria", "eng_int"))
-    avg_ing_cab = (sum_total / sum_cab_vend
-                   if sum_cab_vend > 0 else 0.0)
-
-    bullets = [
-        f"USD <b>{avg_ing_cab:,.0f}/cab</b> (ingreso promedio)",
-        f"USD <b>{sum_total:,.0f}</b> ingreso total del sistema",
-    ]
-
-    # Curva de valor del animal a lo largo del ciclo
-    t_a = ing["cria"]["dias"]
-    t_b = t_a + ing["recria"]["dias"]
-    t_c = t_b + ing["eng_int"]["dias"]
-    xs = [0, t_a, t_b, t_c]
-    ys = [
-        ing["cria"]["kg_in"]   * pc,
-        ing["cria"]["kg_out"]  * ing["cria"]["precio_venta"],
-        ing["recria"]["kg_out"] * ing["recria"]["precio_venta"],
-        ing["eng_int"]["kg_out"] * ing["eng_int"]["precio_venta"],
-    ]
-    chart = _svg_sparkline(xs, ys, color="#16a34a")
-    return _mini_block_html("#16a34a", "💵", "Ingresos", bullets, chart)
-
-
-# ── Tres columnas: mini resúmenes ───────────────────────────────────────────
-
-def _three_minis_html() -> str:
+    cells = "".join(
+        f'<div style="flex:1;min-width:0;padding:0 10px;'
+        f'border-right:1px solid #e4eaf4;">'
+        f'<div style="font-size:0.58rem;color:#94a3b8;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.08em;'
+        f'margin-bottom:3px;">{lbl}</div>'
+        f'<div style="font-size:0.84rem;color:#0c1a2e;font-weight:700;'
+        f'line-height:1.2;overflow:hidden;text-overflow:ellipsis;'
+        f'white-space:nowrap;">{val}</div></div>'
+        for lbl, val in items
+    )
+    # remove the last border-right
+    cells = cells.replace(
+        'border-right:1px solid #e4eaf4;', 'border-right:1px solid #e4eaf4;', 4
+    )
     return (
-        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;'
-        'gap:12px;margin-top:18px;">'
-        f'{_modelo_productivo_mini_html()}'
-        f'{_costos_mini_html()}'
-        f'{_ingresos_mini_html()}'
-        '</div>'
+        f'<div style="background:#f8fafd;border:1px solid #e4eaf4;'
+        f'border-radius:10px;padding:11px 6px;margin-top:14px;'
+        f'display:flex;align-items:stretch;">'
+        f'{cells}</div>'
+        f'<style>'
+        f'</style>'
     )
 
 
-# ── Helper: hbars con valores firmados (positivos verde / negativos rojo) ───
-
-def _hbars_signed_html(items: list[tuple[str, float]],
-                        pos_color: str = "#16a34a",
-                        neg_color: str = "#dc2626",
-                        top_n: int = 4) -> str:
-    """Mini barras horizontales firmadas (margen/cab por etapa)."""
-    if not items:
+def _stage_cards_html(active_keys: list[str], marg: dict,
+                       risk_by_key: dict) -> str:
+    """Cards por etapa activa con: margen/cab, ingreso/cab, costo/cab,
+    riesgo, robustez."""
+    if not active_keys:
         return ""
-    items_sorted = sorted(items, key=lambda x: -x[1])[:top_n]
-    max_abs = max(abs(v) for _, v in items_sorted) or 1.0
-    rows = ""
-    for label, val in items_sorted:
-        pct = max(0.0, abs(val) / max_abs * 100)
-        col = pos_color if val >= 0 else neg_color
-        sign = "+" if val >= 0 else "−"
-        rows += (
-            f'<div style="display:flex;align-items:center;gap:6px;'
-            f'margin-bottom:4px;font-size:0.66rem;line-height:1;">'
-            f'<span style="flex:0 0 78px;color:#475569;font-weight:600;'
-            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-            f'{label}</span>'
-            f'<div style="flex:1;background:#eef2f7;height:6px;'
-            f'border-radius:3px;overflow:hidden;">'
-            f'<div style="background:{col};height:100%;'
-            f'width:{pct:.1f}%;border-radius:3px;"></div></div>'
-            f'<span style="flex:0 0 64px;color:{col};font-weight:700;'
-            f'text-align:right;font-variant-numeric:tabular-nums;">'
-            f'{sign}{abs(val):,.0f}</span></div>'
+
+    n = len(active_keys)
+    grid = "1fr" if n == 1 else ("1fr 1fr" if n == 2 else "1fr 1fr 1fr")
+
+    cards_html = ""
+    for k in active_keys:
+        meta = _STAGE_META[k]
+        m = marg[k]
+        r = risk_by_key.get(k, {})
+        margen_cab  = m["margen_bruto_cab"]
+        ingreso_cab = m["ingreso_cab"]
+        costo_cab   = m["costo_cab"]
+        riesgo      = r.get("risk_composite", 0.0)
+        robustez    = r.get("robustness", 0.0)
+
+        m_color = "#16a34a" if margen_cab >= 0 else "#dc2626"
+        m_sign  = "+" if margen_cab >= 0 else "−"
+        ri_col  = _risk_color(riesgo)
+        ro_col  = _robust_color(robustez)
+
+        cards_html += (
+            f'<div style="background:white;border:1px solid {meta["border"]};'
+            f'border-top:3px solid {meta["color"]};border-radius:12px;'
+            f'padding:14px 16px;box-shadow:0 1px 6px rgba(13,27,66,0.05);">'
+            # Header
+            f'<div style="display:flex;align-items:center;gap:8px;'
+            f'margin-bottom:10px;">'
+            f'<span style="font-size:1.05rem;">{meta["icon"]}</span>'
+            f'<span style="font-size:0.78rem;font-weight:800;color:{meta["color"]};'
+            f'text-transform:uppercase;letter-spacing:0.07em;">'
+            f'{meta["title"]}</span>'
+            f'</div>'
+            # Margen — destacado
+            f'<div style="font-size:0.58rem;color:#94a3b8;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.07em;">Margen / cab</div>'
+            f'<div style="font-size:1.45rem;font-weight:800;color:{m_color};'
+            f'line-height:1.1;letter-spacing:-0.02em;'
+            f'margin:1px 0 10px;font-variant-numeric:tabular-nums;">'
+            f'{m_sign}USD {abs(margen_cab):,.0f}</div>'
+            # Ingreso/Costo
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;'
+            f'border-top:1px solid #f0f4fa;padding-top:8px;">'
+            f'<div><div style="font-size:0.85rem;font-weight:700;color:#1e3a5f;'
+            f'line-height:1.1;font-variant-numeric:tabular-nums;">'
+            f'USD {ingreso_cab:,.0f}</div>'
+            f'<div style="font-size:0.56rem;color:#94a3b8;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.07em;'
+            f'margin-top:2px;">Ingreso</div></div>'
+            f'<div><div style="font-size:0.85rem;font-weight:700;color:#1e3a5f;'
+            f'line-height:1.1;font-variant-numeric:tabular-nums;">'
+            f'USD {costo_cab:,.0f}</div>'
+            f'<div style="font-size:0.56rem;color:#94a3b8;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.07em;'
+            f'margin-top:2px;">Costo</div></div>'
+            f'</div>'
+            # Riesgo / Robustez
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;'
+            f'margin-top:8px;padding-top:8px;border-top:1px solid #f0f4fa;">'
+            f'<div><div style="font-size:0.85rem;font-weight:700;color:{ri_col};'
+            f'line-height:1.1;font-variant-numeric:tabular-nums;">'
+            f'{riesgo:.0f}/100</div>'
+            f'<div style="font-size:0.56rem;color:#94a3b8;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.07em;'
+            f'margin-top:2px;">Riesgo</div></div>'
+            f'<div><div style="font-size:0.85rem;font-weight:700;color:{ro_col};'
+            f'line-height:1.1;font-variant-numeric:tabular-nums;">'
+            f'{robustez:.0f}/100</div>'
+            f'<div style="font-size:0.56rem;color:#94a3b8;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.07em;'
+            f'margin-top:2px;">Robustez</div></div>'
+            f'</div>'
+            f'</div>'
         )
-    return rows
+
+    return (
+        f'<div style="display:grid;grid-template-columns:{grid};'
+        f'gap:10px;margin-top:14px;">{cards_html}</div>'
+    )
 
 
-# ── Helper: limpia el var_label del tornado ("💲  Precio venta  (±20%)") ────
+def _stage_detail_html(active_keys: list[str], marg: dict,
+                        costos: dict) -> str:
+    """Tabla compacta con detalle productivo + económico por etapa activa."""
+    if not active_keys:
+        return ""
 
-def _clean_tornado_label(raw: str) -> str:
-    """Devuelve sólo el nombre limpio de la variable (sin icon ni delta)."""
+    th_style = ('font-size:0.56rem;color:#7a8fa6;font-weight:700;'
+                'text-transform:uppercase;letter-spacing:0.06em;'
+                'padding:6px 7px;text-align:right;border-bottom:1px solid #e4eaf4;')
+    th_first = th_style + 'text-align:left;'
+    td_style = ('font-size:0.78rem;color:#0c1a2e;font-weight:600;'
+                'padding:7px 7px;text-align:right;'
+                'border-bottom:1px solid #f0f4fa;'
+                'font-variant-numeric:tabular-nums;')
+    td_first = td_style.replace("text-align:right", "text-align:left")
+
+    headers = ["Etapa", "Cab", "Días", "kg in", "kg out", "GDP", "CA",
+               "USD/kg", "USD/cab/día", "Margen/cab"]
+
+    head_html = "<tr>" + "".join(
+        f'<th style="{th_first if i == 0 else th_style}">{h}</th>'
+        for i, h in enumerate(headers)
+    ) + "</tr>"
+
+    rows_html = ""
+    for k in active_keys:
+        meta = _STAGE_META[k]
+        m = marg[k]
+        c = costos[k]
+        kg_in   = m["kg_in"]
+        kg_out  = m["kg_out"]
+        dias    = m["dias"]
+        gdp     = (kg_out - kg_in) / dias if dias > 0 else 0.0
+        ca_val  = ps._g({
+            "cria": K.A_CA, "recria": K.B_CA, "eng_int": K.C_CA,
+        }[k], DEFAULTS[{"cria": "a_ca", "recria": "r_ca", "eng_int": "t_ca"}[k]])
+        usd_kg  = c.get("usd_kg", 0.0)
+        ucd     = m["usd_cab_dia"]
+        margen  = m["margen_bruto_cab"]
+        m_color = "#16a34a" if margen >= 0 else "#dc2626"
+        m_sign  = "+" if margen >= 0 else "−"
+
+        cells = [
+            f'<span style="color:{meta["color"]};font-weight:800;">{meta["icon"]} '
+            f'{meta["title"]}</span>',
+            f'{m["cab_in"]:,}',
+            f'{dias}',
+            f'{kg_in:.0f}',
+            f'{kg_out:.0f}',
+            f'{gdp:.3f}',
+            f'{ca_val:.1f}',
+            f'{usd_kg:.2f}',
+            f'{ucd:.2f}',
+            f'<span style="color:{m_color};font-weight:800;">'
+            f'{m_sign}{abs(margen):,.0f}</span>',
+        ]
+        rows_html += "<tr>" + "".join(
+            f'<td style="{td_first if i == 0 else td_style}">{v}</td>'
+            for i, v in enumerate(cells)
+        ) + "</tr>"
+
+    return (
+        f'<div style="margin-top:18px;background:white;border:1px solid #e4eaf4;'
+        f'border-radius:10px;padding:6px 10px;'
+        f'box-shadow:0 1px 4px rgba(13,27,66,0.04);">'
+        f'<div style="font-size:0.62rem;font-weight:800;color:#1565c0;'
+        f'text-transform:uppercase;letter-spacing:0.09em;'
+        f'padding:7px 4px 5px;">Detalle por etapa</div>'
+        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<thead>{head_html}</thead><tbody>{rows_html}</tbody></table>'
+        f'</div>'
+    )
+
+
+def _clean_var_label(raw: str) -> str:
+    """Quita iconos y deltas del label de tornado: '💲 Precio venta (±20%)' → 'Precio venta'."""
     s = raw
     if "(" in s:
         s = s.split("(")[0]
     parts = s.strip().split()
-    # descartar primer token si es un icono (no alfanumérico mayoritariamente)
     if parts and not parts[0][:1].isalpha():
         parts = parts[1:]
     return " ".join(parts).strip()
 
 
-# ── Mini-bloque: Margen Bruto ───────────────────────────────────────────────
+def _risk_summary_html(active_keys: list[str], sens: dict,
+                        risk_by_key: dict) -> str:
+    """Bloque de riesgo: variable más sensible + robustez sistema + alertas."""
+    if not active_keys:
+        return ""
 
-_STAGE_SHORT = {
-    "cria":    "Cría",
-    "recria":  "Recría",
-    "eng_int": "Engorde",
-}
-
-_STAGES_KEYS = ["cria", "recria", "eng_int"]
-
-
-def _margen_bruto_mini_html() -> str:
-    marg = pm._build_margenes()
-
-    # Top etapa por margen/cab
-    top_key = max(_STAGES_KEYS, key=lambda k: marg[k]["margen_bruto_cab"])
-    top_marg_cab = marg[top_key]["margen_bruto_cab"]
-    top_marg_kg = marg[top_key]["margen_kg"]
-
-    sum_total_margen = sum(marg[k]["margen_bruto_total"]
-                            for k in _STAGES_KEYS)
-
-    sign_cab = "+" if top_marg_cab >= 0 else "−"
-    sign_kg = "+" if top_marg_kg >= 0 else "−"
-    sign_tot = "+" if sum_total_margen >= 0 else "−"
-
-    bullets = [
-        f"Top: <b>{_STAGE_SHORT[top_key]}</b> con "
-        f"USD <b>{sign_cab}{abs(top_marg_cab):,.0f}/cab</b>",
-        f"Margen unitario: <b>{sign_kg}USD {abs(top_marg_kg):.2f}/kg</b>",
-        f"Margen total sistema: USD <b>{sign_tot}{abs(sum_total_margen):,.0f}</b>",
-    ]
-
-    items = [(_STAGE_SHORT[k], marg[k]["margen_bruto_cab"])
-             for k in _STAGES_KEYS]
-    chart = _hbars_signed_html(items, pos_color="#d97706",
-                                neg_color="#dc2626", top_n=4)
-
-    return _mini_block_html("#d97706", "📊", "Margen bruto",
-                             bullets, chart)
-
-
-# ── Mini-bloque: Sensibilidad y Riesgo ──────────────────────────────────────
-
-def _sensibilidad_mini_html() -> str:
-    """Mini bloque: variable crítica + precio equilibrio + robustez/riesgo
-    para la etapa con mayor margen bruto/cab."""
-    marg = pm._build_margenes()
-    sens = ps._build_sensibilidad()
-    risk_rows = ps._build_risk_return(sens)
-    risk_by_key = {r["key"]: r for r in risk_rows}
-
-    top_key = max(_STAGES_KEYS, key=lambda k: marg[k]["margen_bruto_cab"])
-    s_top = sens[top_key]
-
-    rows, _baseline = ps._tornado_data(s_top, "margen_cab")
-    if rows:
+    # Variable más sensible: la de mayor swing entre todas las etapas activas
+    top_var, top_swing, top_stage = "—", 0.0, None
+    for k in active_keys:
+        rows, _ = ps._tornado_data(sens[k], "margen_cab")
+        if not rows:
+            continue
         biggest = max(rows, key=lambda r: r["swing"])
-        crit_var = _clean_tornado_label(biggest["var_label"])
-        crit_swing = biggest["swing"]
+        if biggest["swing"] > top_swing:
+            top_swing = biggest["swing"]
+            top_var = _clean_var_label(biggest["var_label"])
+            top_stage = k
+
+    if top_stage is None:
+        crit_html = "—"
     else:
-        crit_var = "—"
-        crit_swing = 0.0
+        meta = _STAGE_META[top_stage]
+        crit_html = (
+            f'<b>{top_var}</b> en '
+            f'<span style="color:{meta["color"]};font-weight:800;">'
+            f'{meta["icon"]} {meta["title"]}</span> · '
+            f'swing USD {top_swing:,.0f}/cab'
+        )
 
-    pe = s_top.get("precio_equilibrio", float("nan"))
-    pv = s_top.get("pv", 0.0)
-    if pe == pe and pv > 0:
-        headroom_pct = (pv - pe) / pv * 100.0
-        pe_text = (f"Precio equilibrio: <b>USD {pe:.2f}/kg</b> "
-                   f"(margen +{headroom_pct:.0f}%)")
+    # Robustez del sistema = promedio entre etapas activas
+    rob_vals = [risk_by_key[k]["robustness"] for k in active_keys
+                if k in risk_by_key]
+    rob_sys = sum(rob_vals) / len(rob_vals) if rob_vals else 0.0
+    rob_col = _robust_color(rob_sys)
+
+    # Alertas: tomamos las primeras 2 alertas relevantes (warning/critical)
+    rows_rr = ps._build_risk_return(sens)
+    alerts = ps._generate_alerts(rows_rr, sens) if rows_rr else []
+    relevant = [a for a in alerts if a.get("level") in ("critical", "warning")][:2]
+    if not relevant:
+        alerts_html = (
+            '<div style="font-size:0.74rem;color:#0c1a2e;line-height:1.4;">'
+            'Sin alertas relevantes.</div>'
+        )
     else:
-        pe_text = "Precio equilibrio: <b>N/A</b>"
+        alerts_html = "".join(
+            f'<div style="font-size:0.74rem;color:#0c1a2e;line-height:1.4;'
+            f'margin-bottom:4px;">'
+            f'<span style="font-weight:700;">{a["icon"]}</span> {a["msg"]}</div>'
+            for a in relevant
+        )
 
-    robustez_top = risk_by_key[top_key]["robustness"]
-    riesgo_top = risk_by_key[top_key]["risk_composite"]
-
-    bullets = [
-        f"Variable crítica en <b>{_STAGE_SHORT[top_key]}</b>: "
-        f"<b>{crit_var}</b> (swing USD {crit_swing:,.0f}/cab)",
-        pe_text,
-        f"Robustez <b>{robustez_top:.0f}/100</b> · "
-        f"Riesgo <b>{riesgo_top:.0f}/100</b>",
-    ]
-
-    top_rows = sorted(rows, key=lambda r: -r["swing"])[:4]
-    items = [(_clean_tornado_label(r["var_label"]), r["swing"])
-             for r in top_rows]
-    chart = _hbars_html(items, color="#7c3aed", top_n=4)
-
-    return _mini_block_html("#7c3aed", "🌪", "Sensibilidad y riesgo",
-                             bullets, chart)
-
-
-# ── Dos columnas: segunda fila de mini resúmenes ────────────────────────────
-
-def _three_minis_html_2() -> str:
     return (
-        '<div style="display:grid;grid-template-columns:1fr 1fr;'
-        'gap:12px;margin-top:12px;">'
-        f'{_margen_bruto_mini_html()}'
-        f'{_sensibilidad_mini_html()}'
-        '</div>'
+        f'<div style="display:grid;grid-template-columns:1.1fr 0.9fr;'
+        f'gap:10px;margin-top:14px;">'
+        # Card 1: Variable + Robustez
+        f'<div style="background:white;border:1px solid #e4eaf4;'
+        f'border-top:3px solid #7c3aed;border-radius:10px;'
+        f'padding:13px 14px;box-shadow:0 1px 4px rgba(13,27,66,0.05);">'
+        f'<div style="font-size:0.62rem;font-weight:800;color:#7c3aed;'
+        f'text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'
+        f'🌪 Riesgo y robustez</div>'
+        f'<div style="font-size:0.58rem;color:#94a3b8;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.07em;">Variable más sensible</div>'
+        f'<div style="font-size:0.82rem;color:#0c1a2e;line-height:1.35;'
+        f'margin:2px 0 10px;">{crit_html}</div>'
+        f'<div style="font-size:0.58rem;color:#94a3b8;font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.07em;">Robustez del sistema</div>'
+        f'<div style="font-size:1.20rem;font-weight:800;color:{rob_col};'
+        f'line-height:1.1;font-variant-numeric:tabular-nums;'
+        f'margin-top:2px;">{rob_sys:.0f}/100</div>'
+        f'</div>'
+        # Card 2: Alertas
+        f'<div style="background:white;border:1px solid #e4eaf4;'
+        f'border-top:3px solid #d97706;border-radius:10px;'
+        f'padding:13px 14px;box-shadow:0 1px 4px rgba(13,27,66,0.05);">'
+        f'<div style="font-size:0.62rem;font-weight:800;color:#d97706;'
+        f'text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px;">'
+        f'⚠ Alertas relevantes</div>'
+        f'{alerts_html}'
+        f'</div>'
+        f'</div>'
     )
 
 
 # ── 6. A4 page (contenedor centrado, blanco, sombra suave) ──────────────────
 
 def _render_a4_page() -> None:
+    """Compone el A4: header → título → hero margen → contexto → cards por
+    etapa activa → tabla detalle → bloque de riesgo."""
+    active_keys = S.active_stages()
+    n_terneros  = int(read(K.ANIMAL_CANTIDAD, DEFAULTS["n_terneros"]))
+
+    marg   = pm._build_margenes()
+    costos = cp._build_costos()
+    sens   = ps._build_sensibilidad()
+    risk_rows = ps._build_risk_return(sens) if active_keys else []
+    risk_by_key = {r["key"]: r for r in risk_rows}
+
+    # Margen total y días sólo de etapas activas
+    margen_total = sum(marg[k]["margen_bruto_total"] for k in active_keys)
+    dias_total   = sum(marg[k]["dias"]                for k in active_keys)
+
+    if active_keys:
+        body = (
+            f'{_hero_margen_html(margen_total, active_keys, n_terneros, dias_total)}'
+            f'{_simulation_context_html(active_keys, n_terneros)}'
+            f'{_stage_cards_html(active_keys, marg, risk_by_key)}'
+            f'{_stage_detail_html(active_keys, marg, costos)}'
+            f'{_risk_summary_html(active_keys, sens, risk_by_key)}'
+        )
+    else:
+        body = (
+            '<div style="margin-top:24px;padding:24px;text-align:center;'
+            'background:#fef3c7;border:1px solid #fde68a;border-radius:10px;'
+            'color:#92400e;font-weight:600;">'
+            'No hay etapas activas. Activá al menos una etapa en Parámetros '
+            'para generar el reporte.</div>'
+        )
+
     st.markdown(
         f'<div style="max-width:880px;margin:0 auto;background:white;'
         f'border:1px solid #e4eaf4;border-radius:14px;'
@@ -691,9 +573,7 @@ def _render_a4_page() -> None:
         f'font-family:Inter,Arial,sans-serif;">'
         f'{_header_html()}'
         f'{_title_html()}'
-        f'{_executive_summary_html()}'
-        f'{_three_minis_html()}'
-        f'{_three_minis_html_2()}'
+        f'{body}'
         f'</div>',
         unsafe_allow_html=True,
     )

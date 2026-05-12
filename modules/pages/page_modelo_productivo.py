@@ -18,7 +18,9 @@ import pandas as pd
 
 import modules.state.keys as K
 import modules.state.stages as S
+import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
+from modules.state.persist import get_editor_state, read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -62,33 +64,32 @@ def _read_stages() -> dict:
     El consumo de MS y la ración diaria son DERIVADOS bioeconómicamente
     (consumo_ms = kg_carne × CA ; rac_dia = consumo_ms / días).
     """
-    ss = st.session_state
     return {
         "cria": {
             "kg_in":   S.kg_in_for("cria"),
             "kg_out":  S.kg_out_for("cria"),
-            "dias":    int(ss.get(K.A_DIAS,           DEFAULTS["d_dias"])),
-            "mort":    float(ss.get(K.A_MORTALIDAD,   DEFAULTS["d_mortalidad"])),
-            "gdp":     float(ss.get(K.A_GDP,          DEFAULTS["a_gdp"])),
-            "ca":      float(ss.get(K.A_CA,           DEFAULTS["a_ca"])),
+            "dias":    D.dias_for("cria"),
+            "mort":    float(read(K.A_MORTALIDAD,   DEFAULTS["d_mortalidad"])),
+            "gdp":     float(read(K.A_GDP,          DEFAULTS["a_gdp"])),
+            "ca":      float(read(K.A_CA,           DEFAULTS["a_ca"])),
             "active":  S.is_active("cria"),
         },
         "recria": {
             "kg_in":   S.kg_in_for("recria"),
             "kg_out":  S.kg_out_for("recria"),
-            "dias":    int(ss.get(K.B_DIAS,           DEFAULTS["b_dias"])),
-            "mort":    float(ss.get(K.B_MORTALIDAD,   DEFAULTS["r_mortalidad"])),
-            "gdp":     float(ss.get(K.B_GDP,          DEFAULTS["r_gdp"])),
-            "ca":      float(ss.get(K.B_CA,           DEFAULTS["r_ca"])),
+            "dias":    D.dias_for("recria"),
+            "mort":    float(read(K.B_MORTALIDAD,   DEFAULTS["r_mortalidad"])),
+            "gdp":     float(read(K.B_GDP,          DEFAULTS["r_gdp"])),
+            "ca":      float(read(K.B_CA,           DEFAULTS["r_ca"])),
             "active":  S.is_active("recria"),
         },
         "eng_int": {
             "kg_in":   S.kg_in_for("eng_int"),
             "kg_out":  S.kg_out_for("eng_int"),
-            "dias":    int(ss.get(K.C_DIAS,           DEFAULTS["c_dias"])),
-            "mort":    float(ss.get(K.C_MORTALIDAD,   DEFAULTS["t_mortalidad"])),
-            "gdp":     float(ss.get(K.C_GDP,          DEFAULTS["t_gdp"])),
-            "ca":      float(ss.get(K.C_CA,           DEFAULTS["t_ca"])),
+            "dias":    D.dias_for("eng_int"),
+            "mort":    float(read(K.C_MORTALIDAD,   DEFAULTS["t_mortalidad"])),
+            "gdp":     float(read(K.C_GDP,          DEFAULTS["t_gdp"])),
+            "ca":      float(read(K.C_CA,           DEFAULTS["t_ca"])),
             "active":  S.is_active("eng_int"),
         },
     }
@@ -106,19 +107,17 @@ def _empty_feed_df() -> pd.DataFrame:
 
 def _read_feed_df(editor_key: str) -> pd.DataFrame:
     """
-    Reconstruye el DataFrame de la tabla de alimentación desde session_state.
+    Reconstruye el DataFrame de la tabla de alimentación.
 
-    st.data_editor con key guarda en ss[key] un dict-delta:
-        {"edited_rows": {idx: {col: val}}, "added_rows": [...], "deleted_rows": [...]}
-    En num_rows="fixed" sólo aparecen edited_rows. Si la versión guarda DataFrame
-    directo, lo aceptamos también.
+    Lee a través de `get_editor_state` para que funcione tanto en
+    Parámetros (donde el widget está activo y ss[editor_key] tiene
+    dict-delta) como en otras slides (donde Streamlit limpió la
+    widget-key y leemos del shadow, que tiene el DataFrame completo).
     """
     base = _empty_feed_df()
-    ss = st.session_state
-    if editor_key not in ss:
+    val = get_editor_state(editor_key)
+    if val is None:
         return base
-
-    val = ss[editor_key]
     if isinstance(val, pd.DataFrame):
         return val
     if isinstance(val, dict):
@@ -491,8 +490,7 @@ def _stage_cabezas(d: dict, n_t: int) -> dict[str, int]:
 
 
 def _segment_cards(d: dict) -> None:
-    ss = st.session_state
-    n_t = int(ss.get(K.ANIMAL_CANTIDAD, DEFAULTS["n_terneros"]))
+    n_t = int(read(K.ANIMAL_CANTIDAD, DEFAULTS["n_terneros"]))
     cab = _stage_cabezas(d, n_t)
 
     cols = st.columns(3, gap="small")
@@ -580,6 +578,172 @@ def _segment_cards(d: dict) -> None:
             st.markdown(card_html, unsafe_allow_html=True)
 
 
+# ── Sección Consumos diarios (MS · MV · por ingrediente) ─────────────────────
+
+def _kpi_card_html(label: str, value: str, unit: str, color: str) -> str:
+    return (
+        f'<div style="background:white;border:1px solid {color}28;'
+        f'border-radius:8px;padding:10px 12px;text-align:left;">'
+        f'<div style="font-size:0.62rem;color:{color};font-weight:700;'
+        f'text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;">'
+        f'{label}</div>'
+        f'<div style="font-size:1.05rem;font-weight:800;color:#0c1a2e;'
+        f'line-height:1.1;font-variant-numeric:tabular-nums;'
+        f'white-space:nowrap;">{value}'
+        f'<span style="font-size:0.65rem;color:#94a3b8;font-weight:600;'
+        f'margin-left:4px;">{unit}</span></div>'
+        f'</div>'
+    )
+
+
+def _consumo_ingredientes_table_html(stage: str, n_cab: int,
+                                     color: str) -> str:
+    """Tabla por ingrediente con kg MS/día/cab, kg MV/día/cab y kg MV/día rodeo."""
+    df = D.consumo_ingredientes(stage)
+    if df.empty or D.consumo_ms_dia_cab(stage) <= 0:
+        return (
+            f'<div style="border:1.5px dashed {color}33;border-radius:8px;'
+            f'padding:14px 12px;text-align:center;color:#94a3b8;'
+            f'font-size:0.74rem;line-height:1.4;margin-top:8px;">'
+            f'Sin consumo calculable<br>'
+            f'<span style="font-size:0.66rem;">'
+            f'Cargá GDP, conversión y la ración en Parámetros</span>'
+            f'</div>'
+        )
+
+    rows_html = ""
+    for i, (_, r) in enumerate(df.iterrows()):
+        name      = str(r["Ingrediente"]).strip()
+        pct       = float(r["%"])
+        pms       = float(r["%MS"])
+        kg_ms_cab = float(r["kg_MS_dia"])
+        kg_mv_cab = float(r["kg_MV_dia"])
+        kg_mv_rod = kg_mv_cab * max(n_cab, 0)
+        bg = "rgba(255,255,255,0.6)" if i % 2 == 0 else "transparent"
+        cell  = ('padding:5px 6px;font-size:0.72rem;text-align:right;'
+                 'color:#374151;white-space:nowrap;')
+        cell_l = ('padding:5px 6px;font-size:0.74rem;text-align:left;'
+                  'color:#0c1a2e;font-weight:600;white-space:nowrap;'
+                  'overflow:hidden;text-overflow:ellipsis;max-width:90px;')
+        cell_strong = ('padding:5px 6px;font-size:0.72rem;text-align:right;'
+                       'color:#0c1a2e;font-weight:700;white-space:nowrap;')
+        rows_html += (
+            f'<tr style="background:{bg};">'
+            f'<td style="{cell_l}" title="{name}">{name}</td>'
+            f'<td style="{cell}">{pct:.1f}%</td>'
+            f'<td style="{cell}">{pms:.1f}%</td>'
+            f'<td style="{cell}">{kg_ms_cab:.2f}</td>'
+            f'<td style="{cell}">{kg_mv_cab:.2f}</td>'
+            f'<td style="{cell_strong}">{kg_mv_rod:,.0f}</td>'
+            f'</tr>'
+        )
+
+    th_base = (f'padding:5px 6px;font-size:0.58rem;font-weight:700;'
+               f'color:{color};white-space:nowrap;text-transform:uppercase;'
+               f'letter-spacing:0.04em;')
+    th_l = th_base + 'text-align:left;'
+    th_r = th_base + 'text-align:right;'
+
+    return (
+        f'<div style="overflow-x:auto;border-radius:8px;margin-top:10px;">'
+        f'<table style="width:100%;min-width:380px;border-collapse:collapse;">'
+        f'<thead><tr style="background:{color}18;'
+        f'border-bottom:1.5px solid {color}33;">'
+        f'<th style="{th_l}">Ingrediente</th>'
+        f'<th style="{th_r}">%</th>'
+        f'<th style="{th_r}">%MS</th>'
+        f'<th style="{th_r}">kg MS/d cab</th>'
+        f'<th style="{th_r}">kg MV/d cab</th>'
+        f'<th style="{th_r}">kg MV/d rodeo</th>'
+        f'</tr></thead>'
+        f'<tbody>{rows_html}</tbody>'
+        f'</table></div>'
+    )
+
+
+def _consumos_section(d: dict) -> None:
+    """Sección 'Consumos diarios' por etapa activa.
+
+    Por etapa muestra 4 KPIs (MS/cab, MS rodeo, MV/cab, MV rodeo) y una
+    tabla con consumo desagregado por ingrediente (kg MV/día/cab y rodeo).
+    Todos los valores se calculan en `modules.state.derived` (única fuente).
+    """
+    n_t = int(read(K.ANIMAL_CANTIDAD, DEFAULTS["n_terneros"]))
+    cab_por_etapa = _stage_cabezas(d, n_t)
+
+    cols = st.columns(3, gap="small")
+    for col, stage in zip(cols, ["cria", "recria", "eng_int"]):
+        title, icon, color = _SEG[stage]
+        _, bg, border = _FILLS[stage]
+        is_active = d[stage]["active"]
+
+        n_cab = cab_por_etapa[stage]
+        ms_cab = D.consumo_ms_dia_cab(stage)
+        mv_cab = D.consumo_mv_dia_cab(stage)
+        ms_rodeo = ms_cab * max(n_cab, 0)
+        mv_rodeo = mv_cab * max(n_cab, 0)
+        pms_pond = D.pct_ms_promedio(stage)
+
+        # Estado nutricional general
+        if ms_cab <= 0:
+            badge = ('Falta cargar GDP / Conversión',
+                     "#94a3b8", "rgba(255,255,255,0.18)")
+        elif pms_pond <= 0:
+            badge = ('Falta %MS para calcular MV',
+                     "#fde68a", "rgba(255,255,255,0.18)")
+        else:
+            badge = (f'%MS pond: {pms_pond:.1f}%',
+                     "#ffffff", "rgba(255,255,255,0.22)")
+
+        kpis_html = (
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;'
+            f'gap:6px;">'
+            f'{_kpi_card_html("MS / cab", f"{ms_cab:.2f}", "kg/día", color)}'
+            f'{_kpi_card_html("MS rodeo", f"{ms_rodeo:,.0f}", "kg/día", color)}'
+            f'{_kpi_card_html("MV / cab", f"{mv_cab:.2f}", "kg/día", color)}'
+            f'{_kpi_card_html("MV rodeo", f"{mv_rodeo:,.0f}", "kg/día", color)}'
+            f'</div>'
+        )
+
+        table_html = (
+            _consumo_ingredientes_table_html(stage, n_cab, color)
+            if is_active else
+            '<div style="border:1.5px dashed #cbd5e1;border-radius:8px;'
+            'padding:14px;text-align:center;color:#94a3b8;font-size:0.72rem;'
+            'margin-top:8px;">Etapa desactivada</div>'
+        )
+
+        card_opacity = "1" if is_active else "0.42"
+        card_bg      = bg if is_active else "#f8fafc"
+        card_border  = border if is_active else "#e2e8f0"
+        header_bg    = (f"linear-gradient(135deg,{color},{color}dd)"
+                        if is_active else "linear-gradient(135deg,#94a3b8,#cbd5e1)")
+
+        card_html = (
+            f'<div style="background:{card_bg};border:1px solid {card_border};'
+            f'border-radius:14px;overflow:hidden;'
+            f'box-shadow:0 1px 6px rgba(13,27,66,0.05);height:100%;'
+            f'opacity:{card_opacity};">'
+            f'<div style="background:{header_bg};padding:11px 14px;color:white;'
+            f'display:flex;justify-content:space-between;align-items:center;'
+            f'gap:8px;">'
+            f'<div style="display:flex;align-items:center;gap:8px;min-width:0;">'
+            f'<span style="font-size:1.05rem;flex-shrink:0;">{icon}</span>'
+            f'<span style="font-size:0.92rem;font-weight:700;'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+            f'{title}</span></div>'
+            f'<span style="background:{badge[2]};border-radius:14px;'
+            f'padding:3px 10px;font-size:0.62rem;font-weight:700;'
+            f'color:{badge[1]};white-space:nowrap;">{badge[0]}</span>'
+            f'</div>'
+            f'<div style="padding:13px 14px 14px;">'
+            f'{kpis_html}{table_html}'
+            f'</div></div>'
+        )
+        with col:
+            st.markdown(card_html, unsafe_allow_html=True)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def render(params: dict, comp: "Comparador") -> None:
@@ -597,3 +761,12 @@ def render(params: dict, comp: "Comparador") -> None:
 
     section("Etapas productivas")
     _segment_cards(d)
+
+    st.divider()
+
+    section("Consumos diarios — MS · MV · por ingrediente")
+    st.caption("Derivados automáticos de GDP × CA (consumo MS), "
+               "%MS ponderado de la ración (consumo MV) y participación "
+               "de cada ingrediente. Total rodeo = consumo/cab × cabezas "
+               "activas en la etapa.")
+    _consumos_section(d)

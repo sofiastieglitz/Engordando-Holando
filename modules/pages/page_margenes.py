@@ -20,7 +20,9 @@ import pandas as pd
 
 import modules.state.keys as K
 import modules.state.stages as S
+import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
+from modules.state.persist import get_editor_state, read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -48,19 +50,20 @@ _FEED_KEYS = {
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _g(key: str, default: float) -> float:
-    return float(st.session_state.get(key, default))
+    """Lectura robusta: shadow > widget-key > default."""
+    return float(read(key, default))
 
 
 def _read_feed_df(editor_key: str) -> pd.DataFrame:
-    """Misma lógica que page_costos / page_modelo_productivo."""
+    """Lee la tabla de ración vía `get_editor_state` (widget→shadow)."""
     base = pd.DataFrame({
         "Ingrediente": [""] * 10,
         "%":           [0.0] * 10,
         "USD/kg MS":   [0.0] * 10,
     })
-    if editor_key not in st.session_state:
+    val = get_editor_state(editor_key)
+    if val is None:
         return base
-    val = st.session_state[editor_key]
     if isinstance(val, pd.DataFrame):
         return val
     if isinstance(val, dict):
@@ -130,7 +133,7 @@ def _build_margenes() -> dict:
     # ── Lecturas ──────────────────────────────────────────────────────────
     a_kg_in   = S.kg_in_for("cria")
     a_kg_out  = S.kg_out_for("cria")
-    a_dias    = int(_g(K.A_DIAS,          DEFAULTS["d_dias"]))
+    a_dias    = D.dias_for("cria")
     a_mort    = _g(K.A_MORTALIDAD,        DEFAULTS["d_mortalidad"])
     a_san     = _g(K.A_SANIDAD,           DEFAULTS["d_sanidad"])
     a_mo_mes  = _g(K.A_MO_MES,            DEFAULTS["d_mo_mes"])
@@ -147,7 +150,7 @@ def _build_margenes() -> dict:
 
     b_kg_in   = S.kg_in_for("recria")
     b_kg_out  = S.kg_out_for("recria")
-    b_dias    = int(_g(K.B_DIAS,          DEFAULTS["b_dias"]))
+    b_dias    = D.dias_for("recria")
     b_mort    = _g(K.B_MORTALIDAD,        DEFAULTS["r_mortalidad"])
     b_san     = _g(K.B_SANIDAD,           DEFAULTS["r_sanidad"])
     b_mo_mes  = _g(K.B_MO_MES,            DEFAULTS["r_mo_mes"])
@@ -165,7 +168,7 @@ def _build_margenes() -> dict:
 
     c_kg_in   = S.kg_in_for("eng_int")
     c_kg_out  = S.kg_out_for("eng_int")
-    c_dias    = int(_g(K.C_DIAS,          DEFAULTS["c_dias"]))
+    c_dias    = D.dias_for("eng_int")
     c_mort    = _g(K.C_MORTALIDAD,        DEFAULTS["t_mortalidad"])
     c_san     = _g(K.C_SANIDAD,           DEFAULTS["t_sanidad"])
     c_mo_mes  = _g(K.C_MO_MES,            DEFAULTS["t_mo_mes"])

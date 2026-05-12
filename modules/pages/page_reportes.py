@@ -14,6 +14,7 @@ import streamlit as st
 import modules.state.keys as K
 from modules.state.defaults import DEFAULTS
 from modules.state import stages as S
+from modules.state.persist import mirror_current, read
 from modules.pages.ui import page_header
 from modules.pages import page_costos as cp
 from modules.pages import page_margenes as pm
@@ -84,6 +85,13 @@ def _render_editor() -> None:
         st.markdown("<div style='height:28px'></div>",
                     unsafe_allow_html=True)
         st.checkbox("Incluir logo", key=_K_LOGO)
+
+    # Espejar los valores al shadow store para que sobrevivan la
+    # navegación a otras slides.
+    mirror_current(_K_EMPRESA)
+    mirror_current(_K_RESPONSABLE)
+    mirror_current(_K_FECHA)
+    mirror_current(_K_LOGO)
 
     st.markdown(
         '<div style="height:6px;border-bottom:1px dashed #e4eaf4;'
@@ -528,8 +536,7 @@ def _render_a4_page() -> None:
     """Compone el A4: header → título → hero margen → contexto → cards por
     etapa activa → tabla detalle → bloque de riesgo."""
     active_keys = S.active_stages()
-    n_terneros  = int(st.session_state.get(K.ANIMAL_CANTIDAD,
-                                            DEFAULTS["n_terneros"]))
+    n_terneros  = int(read(K.ANIMAL_CANTIDAD, DEFAULTS["n_terneros"]))
 
     marg   = pm._build_margenes()
     costos = cp._build_costos()

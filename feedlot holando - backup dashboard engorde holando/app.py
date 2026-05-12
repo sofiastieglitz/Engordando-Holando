@@ -12,14 +12,13 @@ from streamlit_option_menu import option_menu
 from modules.sidebar import render_sidebar
 from modules.economics.comparador import Comparador
 from modules.pages import (
+    page_inicio,
     page_parametros,
     page_modelo_productivo,
     page_ingresos,
     page_costos,
     page_margenes,
     page_sensibilidad,
-    page_escenarios,
-    page_montecarlo,
     page_reportes,
 )
 
@@ -223,6 +222,7 @@ _CSS = """
 
 # ── Nav ───────────────────────────────────────────────────────────────────────
 _NAV_ITEMS: list[tuple[str, str]] = [
+    ("Inicio",                  "house-fill"),
     ("Parámetros",              "sliders"),
     ("Modelo Productivo",       "layers-fill"),
     ("Costos",                  "cash-stack"),
@@ -248,6 +248,7 @@ _NAV_STYLES: dict = {
 }
 
 _PAGES: dict = {
+    "Inicio":                   page_inicio.render,
     "Parámetros":               page_parametros.render,
     "Modelo Productivo":        page_modelo_productivo.render,
     "Costos":                   page_costos.render,

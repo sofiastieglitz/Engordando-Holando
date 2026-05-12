@@ -14,6 +14,7 @@ from modules.state.defaults import (
     INFRA_DEFAULTS,
     COMMERCIAL_DEFAULTS,
 )
+from modules.state.persist import restore_from_backing, purge_stale_widget_mappings
 
 
 def init_state() -> None:
@@ -22,8 +23,29 @@ def init_state() -> None:
     si todavía no existen. Idempotente: llamadas subsiguientes no sobreescriben
     el estado del usuario.
 
-    Orden: comunes → A → B → C → infraestructura (nuevas) → comercial (nuevas).
+    Orden:
+      0. `restore_from_backing()`: rehidrata los widget-keys desde sus
+         shadows. Esto es lo que permite que valores cargados en
+         "Parámetros" sobrevivan la navegación a otras slides (Streamlit
+         purga widget-keys cuyo widget no se rendere en el rerun).
+      1. Fill de defaults para keys que TODAVÍA falten (primera sesión,
+         o post-reset). Las keys ya rehidratadas por restore_from_backing
+         no se tocan.
     """
+    # ── 0a. Cleanup del mapper interno de Streamlit ───────────────────────
+    # Los keys canónicos (K.*) ya no son widget-keys: los widgets ahora
+    # usan `_w_<K>`. Si el sesión tiene entradas viejas en el mapper
+    # (por código viejo o sesiones previas al refactor), se purgan acá
+    # para que los writes/reads sobre ss[K] no pasen por la indirección
+    # stale al widget_id, que sería barrida por el GC al fin del rerun.
+    purge_stale_widget_mappings()
+
+    # ── 0b. Rehidratación desde shadow keys ───────────────────────────────
+    # Debe correr ANTES de cualquier comparación `key not in session_state`
+    # porque las keys rehidratadas ya están "presentes" y no deben recibir
+    # default.
+    restore_from_backing()
+
     _pairs: dict = {
         # ── Comunes ────────────────────────────────────────────────────────────
         K.ANIMAL_CANTIDAD:          ANIMAL_DEFAULTS["n_terneros"],
@@ -33,8 +55,9 @@ def init_state() -> None:
         K.FINANCIERO_TASA_INTERES:  COMMERCIAL_DEFAULTS["tasa_interes"],
 
         # ── A — Venta al destete ───────────────────────────────────────────────
+        # K.A_DIAS / B_DIAS / C_DIAS ya NO se siembran: días es derivado
+        # (modules.state.derived.dias_for) = (kg_out − kg_in) / GDP.
         K.A_PRECIO_VENTA:   COMMERCIAL_DEFAULTS["A"]["precio_venta"],
-        K.A_DIAS:           ANIMAL_DEFAULTS["A"]["dias"],
         K.A_MORTALIDAD:     ANIMAL_DEFAULTS["A"]["mortalidad"],
         K.A_SANIDAD:        ANIMAL_DEFAULTS["A"]["sanidad"],
         K.A_MO_MES:         ANIMAL_DEFAULTS["A"]["mo_mes"],
@@ -93,13 +116,11 @@ def init_state() -> None:
         K.A_COMISION_PCT: DEFAULTS["a_comision_pct"],
 
         # ── Recría (B) — adicionales ───────────────────────────────────────
-        K.B_DIAS:          DEFAULTS["b_dias"],
         K.B_KG_ENTRADA:    DEFAULTS["b_kg_entrada"],
         K.B_PRECIO_COMPRA: DEFAULTS["b_pc"],
         K.B_COMISION_PCT:  DEFAULTS["b_comision_pct"],
 
         # ── Engorde (C) — adicionales ──────────────────────────────────────
-        K.C_DIAS:          DEFAULTS["c_dias"],
         K.C_KG_ENTRADA:    DEFAULTS["c_kg_entrada"],
         K.C_PRECIO_COMPRA: DEFAULTS["c_pc"],
         K.C_COMISION_PCT:  DEFAULTS["c_comision_pct"],
