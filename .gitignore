@@ -1,0 +1,51 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual envs ──────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+# secrets locales nunca van al repo; el config.toml SÍ va
+.streamlit/secrets.toml
+
+# ── Claude Code local state ───────────────────────────────────────────────────
+.claude/
+
+# ── Backups de versiones anteriores (no deben deployarse) ─────────────────────
+BACKUP_DASHBOARD_FINAL/
+feedlot holando - backup*/
+
+# ── Working files en root (documentos de trabajo, no assets de la app) ────────
+# Los assets que la app necesite en runtime deben vivir en modules/assets/ o similar.
+/*.docx
+/*.pdf
+/*.xlsx
+/*.xls
+/*.png
+/*.jpe?g
+/*.jpg
+
+# Logs y temporales
+*.log
+*.tmp
