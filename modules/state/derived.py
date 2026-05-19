@@ -1,25 +1,30 @@
 """
 Derivados — cálculos automáticos sobre el estado base.
 
-Este módulo es la ÚNICA fuente de los siguientes valores derivados:
-  - Días de tenencia por etapa (`dias_for`) — antes era input manual,
-    ahora se calcula: días = (peso_salida − peso_entrada) / GDP.
-  - Consumo MS por ciclo y por día (`consumo_ms_cab`, `consumo_ms_dia_cab`).
-  - Consumo MV por día (`consumo_mv_dia_cab`), derivado vía %MS de la
-    composición de la ración.
-  - Per-ingrediente: kg MS/día y kg MV/día por cabeza (`consumo_ingredientes`).
-  - Precio ponderado y %MS promedio de la ración (`precio_ponderado`,
-    `pct_ms_promedio`).
+Modelo nutricional (nuevo, post-refactor):
+  La tabla de alimentación es la ÚNICA fuente de verdad. El usuario carga
+  por ingrediente:
+      Kg tal cual (kg/cab/día) · %MS · USD/kg MS
+  El sistema deriva:
+      Kg MS_i              = Kg TC_i × %MS_i / 100              (kg/cab/día)
+      consumo_MS_dia_cab   = Σ Kg MS_i                          (kg MS/cab/día)
+      consumo_MV_dia_cab   = Σ Kg TC_i                          (kg MV/cab/día)
+      consumo_MS_cab       = consumo_MS_dia_cab × días          (kg MS/cab ciclo)
+      consumo_MV_cab       = consumo_MV_dia_cab × días          (kg MV/cab ciclo)
+      costo_alim_dia_cab   = Σ (Kg MS_i × USD/kg MS_i)          (USD/cab/día)
+      costo_alim_cab       = costo_alim_dia_cab × días          (USD/cab ciclo)
+      ca                   = consumo_MS_dia_cab / GDP           (kg MS/kg carne)
+      precio_ponderado     = costo_alim_dia_cab / consumo_MS_dia_cab
+      pct_ms_promedio      = consumo_MS_dia_cab / consumo_MV_dia_cab × 100
 
-Todas las funciones son puras sobre `st.session_state` y los shadows de
-la tabla de alimentación. Garantizan que Costos, Márgenes, Sensibilidad,
-Modelo Productivo, Ingresos y Reportes vean valores idénticos sin
-duplicar lógica.
+La conversión alimenticia (CA) y el precio ponderado pasan a ser
+DERIVADOS exclusivamente — no hay ningún input editable de CA en el
+dashboard.
 
 Validaciones:
-  - max(x, 0) defensivo en pesos / GDP / CA.
+  - max(x, 0) defensivo en pesos / GDP / Kg TC / %MS / USD.
   - Divisores → cero ⇒ resultado 0 (no NaN).
-  - Tabla vacía o sin %MS ⇒ MV = 0 (no se inventa).
+  - Tabla vacía ⇒ todos los derivados son 0.
 """
 from __future__ import annotations
 
@@ -34,7 +39,6 @@ from modules.state.persist import get_editor_state, read
 # ── Mapeo etapa → claves de session_state ────────────────────────────────────
 
 _GDP_KEY = {"cria": K.A_GDP, "recria": K.B_GDP, "eng_int": K.C_GDP}
-_CA_KEY  = {"cria": K.A_CA,  "recria": K.B_CA,  "eng_int": K.C_CA}
 
 _FEED_EDITOR_KEY = {
     "cria":    "feed_table_cria_de",
@@ -44,12 +48,7 @@ _FEED_EDITOR_KEY = {
 
 
 def _g(key: str, default: float = 0.0) -> float:
-    """Lectura robusta: shadow > widget-key > default.
-
-    Garantiza que los valores cargados en Parámetros sean visibles para
-    los cálculos derivados incluso cuando Streamlit purga las widget-keys
-    al navegar a otra slide.
-    """
+    """Lectura robusta: shadow > widget-key > default."""
     return float(read(key, default))
 
 
@@ -57,10 +56,6 @@ def _g(key: str, default: float = 0.0) -> float:
 
 def gdp_for(stage: str) -> float:
     return _g(_GDP_KEY[stage], 0.0)
-
-
-def ca_for(stage: str) -> float:
-    return _g(_CA_KEY[stage], 0.0)
 
 
 def kg_in_for(stage: str) -> float:
@@ -78,16 +73,7 @@ def kg_producidos_cab(stage: str) -> float:
 # ── Tiempo ────────────────────────────────────────────────────────────────────
 
 def dias_for(stage: str) -> int:
-    """Días de tenencia derivados: (peso_salida − peso_entrada) / GDP.
-
-    Antes era un input editable. Ahora se recalcula en cada lectura, así
-    el resto del dashboard (costos, márgenes, sensibilidad, etc.) ve el
-    mismo número sin que el usuario tenga que mantenerlo coherente.
-
-    Validaciones:
-      - GDP ≤ 0 ó kg_producidos ≤ 0 ⇒ 0 días.
-      - Resultado entero (redondeo al entero más cercano).
-    """
+    """días = (peso_salida − peso_entrada) / GDP."""
     kg_prod = kg_producidos_cab(stage)
     gdp = gdp_for(stage)
     if gdp <= 0 or kg_prod <= 0:
@@ -96,60 +82,51 @@ def dias_for(stage: str) -> int:
 
 
 def dias_total() -> int:
-    """Suma de días sobre las etapas activas (slice contiguo)."""
     return sum(dias_for(s) for s in S.active_stages())
 
 
-# ── Consumo MS ────────────────────────────────────────────────────────────────
+# ── Tabla de alimentación: schema canónico ───────────────────────────────────
 
-def consumo_ms_cab(stage: str) -> float:
-    """Consumo MS TOTAL del ciclo, kg MS/cab.
-
-    consumo_MS = kg_producidos × CA
-    """
-    return kg_producidos_cab(stage) * max(ca_for(stage), 0.0)
+_FEED_COLS = ["Ingrediente", "Kg TC", "%MS", "Kg MS", "USD/kg MS"]
+_FEED_ROWS = 10
 
 
-def consumo_ms_dia_cab(stage: str) -> float:
-    """Consumo MS DIARIO, kg MS/cab/día.
-
-    consumo_MS/día = GDP × CA
-    """
-    return max(gdp_for(stage), 0.0) * max(ca_for(stage), 0.0)
-
-
-# ── Tabla de alimentación: lectura normalizada ───────────────────────────────
-
-_FEED_COLS = ["Ingrediente", "%", "%MS", "USD/kg MS"]
-
-
-def _empty_feed_df(rows: int = 10) -> pd.DataFrame:
+def _empty_feed_df(rows: int = _FEED_ROWS) -> pd.DataFrame:
     return pd.DataFrame({
-        "Ingrediente": [""]   * rows,
-        "%":           [0.0]  * rows,
-        "%MS":         [0.0]  * rows,
-        "USD/kg MS":   [0.0]  * rows,
+        "Ingrediente": [""]  * rows,
+        "Kg TC":       [0.0] * rows,
+        "%MS":         [0.0] * rows,
+        "Kg MS":       [0.0] * rows,
+        "USD/kg MS":   [0.0] * rows,
     })
 
 
-def migrate_feed_df(df: pd.DataFrame, rows: int = 10) -> pd.DataFrame:
-    """Garantiza el esquema canónico [Ingrediente, %, %MS, USD/kg MS].
+def migrate_feed_df(df: pd.DataFrame, rows: int = _FEED_ROWS) -> pd.DataFrame:
+    """Garantiza el schema canónico [Ingrediente, Kg TC, %MS, Kg MS, USD/kg MS].
 
-    - Inserta %MS=0.0 si no existe (migración de tablas previas a 3 cols).
-    - Reordena columnas al canónico.
-    - Trunca/expande al número de filas pedido.
+    Migraciones soportadas:
+      - Tablas viejas con columna "%" (modelo % en ración): se descarta "%"
+        y se inicializa Kg TC = 0 (el usuario re-ingresa el consumo TC).
+        Ingrediente / %MS / USD/kg MS se preservan.
+      - Tablas sin "%MS" o sin "Kg MS": columnas creadas en 0.
     """
     if not isinstance(df, pd.DataFrame) or df.empty:
         return _empty_feed_df(rows)
     out = df.copy()
-    if "%MS" not in out.columns:
-        out["%MS"] = 0.0
     if "Ingrediente" not in out.columns:
         out["Ingrediente"] = ""
-    if "%" not in out.columns:
-        out["%"] = 0.0
+    if "Kg TC" not in out.columns:
+        out["Kg TC"] = 0.0
+    if "%MS" not in out.columns:
+        out["%MS"] = 0.0
+    if "Kg MS" not in out.columns:
+        out["Kg MS"] = 0.0
     if "USD/kg MS" not in out.columns:
         out["USD/kg MS"] = 0.0
+    # Recalcular Kg MS para asegurar consistencia con Kg TC × %MS/100
+    kg_tc = pd.to_numeric(out["Kg TC"], errors="coerce").fillna(0.0)
+    pms   = pd.to_numeric(out["%MS"],   errors="coerce").fillna(0.0)
+    out["Kg MS"] = (kg_tc * pms / 100.0).astype(float)
     out = out[_FEED_COLS]
     if len(out) < rows:
         pad = _empty_feed_df(rows - len(out))
@@ -160,9 +137,7 @@ def migrate_feed_df(df: pd.DataFrame, rows: int = 10) -> pd.DataFrame:
 
 
 def _read_feed_raw(stage: str) -> pd.DataFrame:
-    """DataFrame crudo del shadow (10 filas). Útil cuando un dict-delta
-    está en ss y necesitamos reconstruir; el orquestador en
-    page_parametros guarda DataFrames completos en el shadow tras editar."""
+    """DataFrame crudo del shadow (10 filas, schema canónico)."""
     val = get_editor_state(_FEED_EDITOR_KEY[stage])
     if isinstance(val, pd.DataFrame):
         return migrate_feed_df(val)
@@ -177,99 +152,119 @@ def _read_feed_raw(stage: str) -> pd.DataFrame:
                 for col, v in changes.items():
                     if col in df.columns:
                         df.at[idx, col] = v
-        return df
+        return migrate_feed_df(df)
     return _empty_feed_df()
 
 
 def feed_df_active(stage: str) -> pd.DataFrame:
-    """Filas con ingrediente no-vacío y % > 0, columnas canónicas."""
+    """Filas con ingrediente no-vacío y Kg TC > 0. Recalcula Kg MS."""
     raw = _read_feed_raw(stage)
-    name = raw["Ingrediente"].astype(str).str.strip()
-    pct = pd.to_numeric(raw["%"], errors="coerce").fillna(0.0)
-    pms = pd.to_numeric(raw["%MS"], errors="coerce").fillna(0.0)
-    usd = pd.to_numeric(raw["USD/kg MS"], errors="coerce").fillna(0.0)
-    mask = (name != "") & (pct > 0)
+    name  = raw["Ingrediente"].astype(str).str.strip()
+    kg_tc = pd.to_numeric(raw["Kg TC"],     errors="coerce").fillna(0.0).clip(lower=0.0)
+    pms   = pd.to_numeric(raw["%MS"],       errors="coerce").fillna(0.0).clip(lower=0.0, upper=100.0)
+    usd   = pd.to_numeric(raw["USD/kg MS"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    mask  = (name != "") & (kg_tc > 0)
+    kg_ms = kg_tc * pms / 100.0
     return pd.DataFrame({
         "Ingrediente": name[mask].values,
-        "%":           pct[mask].values,
+        "Kg TC":       kg_tc[mask].values,
         "%MS":         pms[mask].values,
+        "Kg MS":       kg_ms[mask].values,
         "USD/kg MS":   usd[mask].values,
     })
 
 
-# ── Métricas agregadas de la ración ──────────────────────────────────────────
-
-def total_pct(stage: str) -> float:
-    df = feed_df_active(stage)
-    return float(df["%"].sum())
-
-
-def precio_ponderado(stage: str) -> float:
-    """USD/kg MS ponderado por % de cada ingrediente."""
-    df = feed_df_active(stage)
-    total = float(df["%"].sum())
-    if total <= 0:
-        return 0.0
-    return float((df["%"] * df["USD/kg MS"]).sum() / total)
-
-
-def pct_ms_promedio(stage: str) -> float:
-    """%MS promedio ponderado por % de la ración."""
-    df = feed_df_active(stage)
-    total = float(df["%"].sum())
-    if total <= 0:
-        return 0.0
-    return float((df["%"] * df["%MS"]).sum() / total)
-
-
-# ── Consumo MV (derivado del %MS) ────────────────────────────────────────────
+# ── Consumos diarios (desde la tabla directamente) ───────────────────────────
 
 def consumo_mv_dia_cab(stage: str) -> float:
-    """Consumo MV diario kg/cab. Suma kg_MV_i sobre ingredientes activos.
+    """Σ Kg tal cual de la ración, kg MV/cab/día."""
+    df = feed_df_active(stage)
+    return float(df["Kg TC"].sum()) if not df.empty else 0.0
 
-    kg_MS_i/día = (%_i / Σ%) × consumo_MS/día
-    kg_MV_i/día = kg_MS_i/día / (%MS_i / 100)   [si %MS_i > 0]
 
-    Si un ingrediente tiene %MS=0, no se puede convertir y se omite.
+def consumo_ms_dia_cab(stage: str) -> float:
+    """Σ Kg MS de la ración, kg MS/cab/día."""
+    df = feed_df_active(stage)
+    return float(df["Kg MS"].sum()) if not df.empty else 0.0
+
+
+def consumo_ms_cab(stage: str) -> float:
+    """Consumo MS del ciclo, kg MS/cab = dia × días."""
+    return consumo_ms_dia_cab(stage) * dias_for(stage)
+
+
+def consumo_mv_cab(stage: str) -> float:
+    """Consumo MV del ciclo, kg MV/cab = dia × días."""
+    return consumo_mv_dia_cab(stage) * dias_for(stage)
+
+
+# ── Costo alimentación (derivado de la tabla) ────────────────────────────────
+
+def costo_alim_dia_cab(stage: str) -> float:
+    """USD/cab/día = Σ (Kg MS_i × USD/kg MS_i)."""
+    df = feed_df_active(stage)
+    if df.empty:
+        return 0.0
+    return float((df["Kg MS"] * df["USD/kg MS"]).sum())
+
+
+def costo_alim_cab(stage: str) -> float:
+    """USD/cab del ciclo = costo_dia × días."""
+    return costo_alim_dia_cab(stage) * dias_for(stage)
+
+
+# ── Conversión y precio ponderado (ambos DERIVADOS) ──────────────────────────
+
+def ca_for(stage: str) -> float:
+    """Conversión alimenticia derivada: kg MS / kg carne = MS_dia / GDP.
+
+    Antes era un input editable (K.*_CA); ahora la única fuente nutricional
+    es la tabla, así que CA se calcula con consistencia perfecta.
     """
+    gdp = gdp_for(stage)
+    if gdp <= 0:
+        return 0.0
+    return consumo_ms_dia_cab(stage) / gdp
+
+
+def eficiencia_for(stage: str) -> float:
+    """kg carne / kg MS = GDP / MS_dia. Inversa de la CA."""
     ms_dia = consumo_ms_dia_cab(stage)
     if ms_dia <= 0:
         return 0.0
-    df = feed_df_active(stage)
-    total = float(df["%"].sum())
-    if total <= 0:
-        return 0.0
-    total_mv = 0.0
-    for _, r in df.iterrows():
-        pct_i = float(r["%"])
-        pms_i = float(r["%MS"])
-        if pms_i <= 0:
-            continue
-        ms_i = pct_i / total * ms_dia
-        total_mv += ms_i / (pms_i / 100.0)
-    return total_mv
+    return gdp_for(stage) / ms_dia
 
+
+def precio_ponderado(stage: str) -> float:
+    """USD/kg MS ponderado por consumo real = costo_dia / MS_dia."""
+    ms_dia = consumo_ms_dia_cab(stage)
+    if ms_dia <= 0:
+        return 0.0
+    return costo_alim_dia_cab(stage) / ms_dia
+
+
+def pct_ms_promedio(stage: str) -> float:
+    """%MS de la ración total = MS_dia / MV_dia × 100."""
+    mv_dia = consumo_mv_dia_cab(stage)
+    if mv_dia <= 0:
+        return 0.0
+    return consumo_ms_dia_cab(stage) / mv_dia * 100.0
+
+
+# ── Consumo por ingrediente (vista para reportes y modelo productivo) ────────
 
 def consumo_ingredientes(stage: str) -> pd.DataFrame:
-    """Por ingrediente activo: kg MS/día/cab y kg MV/día/cab.
+    """Por ingrediente activo: Kg TC, %MS, Kg MS, USD/kg MS,
+    kg_MS_dia (=Kg MS), kg_MV_dia (=Kg TC), usd_dia (=Kg MS × USD).
 
-    Columnas: Ingrediente, %, %MS, USD/kg MS, kg_MS_dia, kg_MV_dia.
-    Si la ración está vacía o consumo_MS_día = 0, devuelve un DF vacío.
+    Si la ración está vacía, devuelve un DF vacío con las columnas esperadas.
     """
     df = feed_df_active(stage)
+    cols_out = [*_FEED_COLS, "kg_MS_dia", "kg_MV_dia", "usd_dia"]
     if df.empty:
-        return pd.DataFrame(columns=[*_FEED_COLS, "kg_MS_dia", "kg_MV_dia"])
-    ms_dia = consumo_ms_dia_cab(stage)
-    total = float(df["%"].sum())
-    df = df.copy()
-    if ms_dia <= 0 or total <= 0:
-        df["kg_MS_dia"] = 0.0
-        df["kg_MV_dia"] = 0.0
-        return df
-    df["kg_MS_dia"] = df["%"] / total * ms_dia
-    df["kg_MV_dia"] = df.apply(
-        lambda r: (r["kg_MS_dia"] / (r["%MS"] / 100.0))
-                  if float(r["%MS"]) > 0 else 0.0,
-        axis=1,
-    )
-    return df
+        return pd.DataFrame(columns=cols_out)
+    out = df.copy()
+    out["kg_MS_dia"] = out["Kg MS"]
+    out["kg_MV_dia"] = out["Kg TC"]
+    out["usd_dia"]   = out["Kg MS"] * out["USD/kg MS"]
+    return out

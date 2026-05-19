@@ -35,7 +35,6 @@ DEFAULTS: dict = {
     "r_precio_venta":   0.0,
     "r_gdp":            0.0,
     "r_mortalidad":     0.0,
-    "r_ca":             0.0,
     "r_ing1_pct":       0.0,
     "r_ing1_precio":    0.0,
     "r_ing2_pct":       0.0,
@@ -51,7 +50,6 @@ DEFAULTS: dict = {
     "t_precio_venta":   0.0,
     "t_gdp":            0.0,
     "t_mortalidad":     0.0,
-    "t_ca":             0.0,
     "t_ing1_pct":       0.0,
     "t_ing1_precio":    0.0,
     "t_ing2_pct":       0.0,
@@ -71,6 +69,8 @@ DEFAULTS: dict = {
     "a_kg_entrada":    0.0,
     "a_gdp":           0.0,
     "a_comision_pct":  0.0,
+    # NOTE: a_ca / r_ca / t_ca eliminados — la conversión es derivada
+    # desde la tabla de ración (ver modules.state.derived.ca_for).
 
     # Recría (B) — adicionales
     "b_dias":          0,
@@ -86,9 +86,6 @@ DEFAULTS: dict = {
 
     # Comercialización — fletes
     "a_fe":     0.0,
-
-    # Conversión cría
-    "a_ca":            0.0,
 
     # Operación — combustible + servicios por etapa (USD/mes)
     "a_combustible":   0.0,
@@ -130,7 +127,6 @@ ANIMAL_DEFAULTS: dict = {
         "peso_salida": float(DEFAULTS["r_peso_salida"]),
         "gdp":         float(DEFAULTS["r_gdp"]),
         "mortalidad":  float(DEFAULTS["r_mortalidad"]),
-        "ca":          float(DEFAULTS["r_ca"]),
         "sanidad":     float(DEFAULTS["r_sanidad"]),
         "mo_mes":      float(DEFAULTS["r_mo_mes"]),
     },
@@ -138,7 +134,6 @@ ANIMAL_DEFAULTS: dict = {
         "peso_final":  float(DEFAULTS["t_peso_final"]),
         "gdp":         float(DEFAULTS["t_gdp"]),
         "mortalidad":  float(DEFAULTS["t_mortalidad"]),
-        "ca":          float(DEFAULTS["t_ca"]),
         "sanidad":     float(DEFAULTS["t_sanidad"]),
         "mo_mes":      float(DEFAULTS["t_mo_mes"]),
     },

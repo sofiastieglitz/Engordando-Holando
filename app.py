@@ -10,6 +10,7 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 
 from modules.sidebar import render_sidebar
+from modules.version import get_version_string
 from modules.economics.comparador import Comparador
 from modules.pages import (
     page_inicio,
@@ -280,6 +281,18 @@ def _branding() -> None:
     )
 
 
+def _version_footer() -> None:
+    st.markdown(
+        f"""<div style="padding:10px 14px 14px;margin-top:auto;
+                        font-size:0.66rem;color:#4a7a9b;
+                        letter-spacing:0.03em;line-height:1.4;">
+            <span style="color:#3d6885;">build</span>
+            <span style="color:#7fa8cc;font-family:monospace;">{get_version_string()}</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -297,6 +310,7 @@ def main() -> None:
             key="main_nav",
         )
         st.divider()
+        _version_footer()
 
     # Read params from session_state (widgets live in page_parametros)
     params = render_sidebar()

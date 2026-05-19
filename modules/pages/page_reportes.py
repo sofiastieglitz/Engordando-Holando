@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import streamlit as st
 
 import modules.state.keys as K
+import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
 from modules.state import stages as S
 from modules.state.persist import mirror_current, read
@@ -393,9 +394,7 @@ def _stage_detail_html(active_keys: list[str], marg: dict,
         kg_out  = m["kg_out"]
         dias    = m["dias"]
         gdp     = (kg_out - kg_in) / dias if dias > 0 else 0.0
-        ca_val  = ps._g({
-            "cria": K.A_CA, "recria": K.B_CA, "eng_int": K.C_CA,
-        }[k], DEFAULTS[{"cria": "a_ca", "recria": "r_ca", "eng_int": "t_ca"}[k]])
+        ca_val  = D.ca_for(k)
         usd_kg  = c.get("usd_kg", 0.0)
         ucd     = m["usd_cab_dia"]
         margen  = m["margen_bruto_cab"]

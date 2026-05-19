@@ -156,37 +156,43 @@ def _three_stage_columns(render_fn: Callable[[str, str], None]) -> None:
 
 def _empty_feed_table() -> pd.DataFrame:
     return pd.DataFrame({
-        "Ingrediente": [""]   * 10,
-        "%":           [0.0]  * 10,
-        "%MS":         [0.0]  * 10,
-        "USD/kg MS":   [0.0]  * 10,
+        "Ingrediente": [""]  * 10,
+        "Kg TC":       [0.0] * 10,
+        "%MS":         [0.0] * 10,
+        "Kg MS":       [0.0] * 10,
+        "USD/kg MS":   [0.0] * 10,
     })
 
 
 def _feed_table_block(table_key: str, *,
-                      kg_in: float, kg_out: float,
-                      ca: float, dias: int,
+                      gdp: float, dias: int,
                       color: str) -> None:
-    """Tabla editable de ingredientes + cascada bioeconómica derivada.
+    """Tabla editable de ingredientes (modelo nutricional Kg TC).
 
-    Modelo bioeconómico (única fuente de verdad para alimentación):
-        kg_carne      = max(kg_out − kg_in, 0)
-        consumo_MS    = kg_carne × CA                  (kg MS/cab del ciclo)
-        precio_pond   = Σ (% × USD/kg MS) / Σ %        (USD/kg MS)
-        %MS_pond      = Σ (% × %MS) / Σ %              (% de MS de la ración)
-        costo_cab     = consumo_MS × precio_pond       (USD/cab del ciclo)
-        ración_MS_día = consumo_MS / días              (kg MS/cab/día)
-        ración_MV_día = ración_MS_día / (%MS_pond/100) (kg MV/cab/día)
+    Schema:
+        Ingrediente · Kg TC (kg/cab/día) · %MS · Kg MS (calc) · USD/kg MS
 
-    Columnas de la tabla: Ingrediente · % ración · %MS · USD/kg MS.
+    Derivados (en el panel debajo de la tabla):
+        Kg MS_i           = Kg TC_i × %MS_i/100
+        consumo_MS_dia    = Σ Kg MS_i
+        consumo_MV_dia    = Σ Kg TC_i
+        consumo_MS_ciclo  = consumo_MS_dia × días
+        consumo_MV_ciclo  = consumo_MV_dia × días
+        costo_dia_cab     = Σ (Kg MS_i × USD/kg MS_i)
+        costo_ciclo_cab   = costo_dia_cab × días
+        CA (derivada)     = consumo_MS_dia / GDP
+        Eficiencia        = GDP / consumo_MS_dia
+        precio_pond       = costo_dia_cab / consumo_MS_dia
+        %MS_pond          = consumo_MS_dia / consumo_MV_dia × 100
     """
     editor_key = table_key + "_de"
-    st.caption("**Composición de la ración** — definí ingredientes, "
-               "% en ración, %MS y precio USD/kg MS:")
+    st.caption("**Composición de la ración** — definí ingredientes y "
+               "kg consumidos *tal cual* por animal por día. "
+               "Kg MS se calcula automáticamente.")
 
-    # ── Inicialización de la tabla con migración de esquema ───────────────
-    # Si el shadow tiene una tabla previa (de antes de que existiera %MS),
-    # `D.migrate_feed_df` inserta la columna y reordena al canónico.
+    # ── Inicialización con migración de esquema ──────────────────────────
+    # `D.migrate_feed_df` dropea cualquier columna "%" legacy, asegura
+    # las 5 columnas canónicas y recalcula Kg MS = Kg TC × %MS/100.
     stored = get_editor_state(editor_key)
     if (editor_key not in st.session_state
             and isinstance(stored, pd.DataFrame)):
@@ -200,55 +206,86 @@ def _feed_table_block(table_key: str, *,
         use_container_width=True,
         num_rows="fixed",
         hide_index=True,
+        disabled=["Kg MS"],
         column_config={
             "Ingrediente": st.column_config.TextColumn(
                 "Ingrediente", width="medium",
             ),
-            "%": st.column_config.NumberColumn(
-                "% en ración", min_value=0.0, max_value=100.0,
-                step=0.5, format="%.1f",
-                help="Participación en la ración (base materia seca).",
+            "Kg TC": st.column_config.NumberColumn(
+                "Kg TC", min_value=0.0,
+                step=0.1, format="%.2f",
+                help=("Kg tal cual consumidos por animal y por día "
+                      "(MV: como sale del silo/bolsa)."),
             ),
             "%MS": st.column_config.NumberColumn(
                 "%MS", min_value=0.0, max_value=100.0,
                 step=0.5, format="%.1f",
-                help=("Materia seca del ingrediente. Usada para convertir "
-                      "MS ↔ MV (kg de alimento tal cual)."),
+                help=("Materia seca del ingrediente. "
+                      "Kg MS = Kg TC × %MS / 100."),
+            ),
+            "Kg MS": st.column_config.NumberColumn(
+                "Kg MS", format="%.3f",
+                help="Calculado: Kg TC × %MS / 100. No editable.",
             ),
             "USD/kg MS": st.column_config.NumberColumn(
                 "USD/kg MS", min_value=0.0, step=0.001, format="%.3f",
             ),
         },
     )
-    # Persistir el DataFrame COMPLETO al shadow store.
-    save_editor_state(editor_key, edited.copy())
 
-    # ── Cascada derivada ──────────────────────────────────────────────────
-    pct_num     = pd.to_numeric(edited["%"],         errors="coerce").fillna(0.0)
-    pms_num     = pd.to_numeric(edited["%MS"],       errors="coerce").fillna(0.0)
-    usd_num     = pd.to_numeric(edited["USD/kg MS"], errors="coerce").fillna(0.0)
-    tot_pct     = float(pct_num.sum())
-    mask        = pct_num > 0
-    if mask.any() and tot_pct > 0:
-        p_pond  = float((pct_num[mask] * usd_num[mask]).sum() / tot_pct)
-        pms_pond = float((pct_num[mask] * pms_num[mask]).sum() / tot_pct)
-    else:
-        p_pond  = 0.0
-        pms_pond = 0.0
+    # Recalcular Kg MS sobre el DataFrame editado y persistir COMPLETO al shadow.
+    edited = edited.copy()
+    kg_tc_col = pd.to_numeric(edited["Kg TC"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    pms_col   = pd.to_numeric(edited["%MS"],   errors="coerce").fillna(0.0).clip(lower=0.0, upper=100.0)
+    edited["Kg MS"] = (kg_tc_col * pms_col / 100.0).astype(float)
+    save_editor_state(editor_key, edited)
 
-    kg_carne   = max(kg_out - kg_in, 0.0)
-    consumo_ms = kg_carne * max(ca, 0.0)
-    costo_cab  = consumo_ms * p_pond
-    rac_ms_dia = (consumo_ms / dias) if dias > 0 else 0.0
-    rac_mv_dia = (rac_ms_dia / (pms_pond / 100.0)) if pms_pond > 0 else 0.0
-    consumo_mv = (consumo_ms / (pms_pond / 100.0)) if pms_pond > 0 else 0.0
+    # ── Cascada derivada (cab/día y cab/ciclo) ───────────────────────────
+    usd_col   = pd.to_numeric(edited["USD/kg MS"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    name_col  = edited["Ingrediente"].astype(str).str.strip()
+    mask      = (name_col != "") & (kg_tc_col > 0)
 
-    pct_status_color = "#16a34a" if 95 <= tot_pct <= 105 else "#b45309"
-    pct_msg = ("Σ % ≈ 100%" if 95 <= tot_pct <= 105
-               else "Σ % debería sumar ~100%")
-    pms_status_color = "#16a34a" if pms_pond > 0 else "#b45309"
-    pms_msg = ("(%MS válido)" if pms_pond > 0
-               else "(definí %MS para calcular MV)")
+    mv_dia    = float(kg_tc_col[mask].sum())
+    ms_dia    = float((kg_tc_col[mask] * pms_col[mask] / 100.0).sum())
+    costo_dia = float((kg_tc_col[mask] * pms_col[mask] / 100.0
+                       * usd_col[mask]).sum())
+
+    mv_ciclo    = mv_dia    * dias
+    ms_ciclo    = ms_dia    * dias
+    costo_ciclo = costo_dia * dias
+
+    ca_der    = (ms_dia / gdp) if gdp > 0 else 0.0
+    efic_der  = (gdp / ms_dia) if ms_dia > 0 else 0.0
+    p_pond    = (costo_dia / ms_dia) if ms_dia > 0 else 0.0
+    pms_pond  = (ms_dia / mv_dia * 100.0) if mv_dia > 0 else 0.0
+
+    # ── Fila TOTAL visual ──────────────────────────────────────────────────
+    total_color = color
+    total_row_html = (
+        f'<div style="background:{total_color}10;border:1px solid {total_color}33;'
+        f'border-radius:8px;padding:8px 12px;margin-top:6px;'
+        f'display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:8px;'
+        f'font-size:0.78rem;align-items:center;">'
+        f'<div style="font-weight:800;color:{total_color};'
+        f'text-transform:uppercase;letter-spacing:0.06em;font-size:0.66rem;">'
+        f'TOTAL ración (cab/día)</div>'
+        f'<div style="text-align:right;color:#0c1a2e;font-weight:700;'
+        f'font-variant-numeric:tabular-nums;">{mv_dia:.2f} kg TC</div>'
+        f'<div style="text-align:right;color:#0c1a2e;font-weight:700;'
+        f'font-variant-numeric:tabular-nums;">{ms_dia:.2f} kg MS</div>'
+        f'<div></div>'
+        f'</div>'
+    )
+    st.markdown(total_row_html, unsafe_allow_html=True)
+
+    # ── Panel resumen nutricional + económico ─────────────────────────────
+    ms_msg_color = "#16a34a" if ms_dia > 0 else "#b45309"
+    ms_msg       = ("(MS calculada)" if ms_dia > 0
+                    else "(cargá Kg TC y %MS)")
+    ca_msg       = (f"{ca_der:.2f} kg MS/kg carne"
+                    if ca_der > 0 else "—")
+    efic_msg     = (f"{efic_der:.3f} kg carne/kg MS"
+                    if efic_der > 0 else "—")
 
     st.markdown(
         f'<div style="background:white;border:1px solid {color}22;'
@@ -256,24 +293,17 @@ def _feed_table_block(table_key: str, *,
         f'font-size:0.74rem;color:#475569;line-height:1.55;">'
         f'<div style="font-size:0.60rem;font-weight:700;color:{color};'
         f'text-transform:uppercase;letter-spacing:0.07em;margin-bottom:4px;">'
-        f'Cascada bioeconómica</div>'
-        f'% total ración: '
-        f'<b style="color:{pct_status_color};">{tot_pct:.1f}%</b> '
-        f'<span style="color:#94a3b8;font-size:0.66rem;">({pct_msg})</span><br>'
-        f'%MS ponderado: <b style="color:{pms_status_color};">'
-        f'{pms_pond:.1f}%</b> '
-        f'<span style="color:#94a3b8;font-size:0.66rem;">{pms_msg}</span><br>'
+        f'Cascada nutricional</div>'
+        f'%MS ponderado: <b style="color:{ms_msg_color};">{pms_pond:.1f}%</b> '
+        f'<span style="color:#94a3b8;font-size:0.66rem;">{ms_msg}</span><br>'
+        f'Conversión (derivada): <b style="color:#0c1a2e;">{ca_msg}</b><br>'
+        f'Eficiencia: <b style="color:#0c1a2e;">{efic_msg}</b><br>'
         f'Precio ponderado: <b style="color:#0c1a2e;">USD {p_pond:.3f}/kg MS</b><br>'
-        f'kg producidos: <b style="color:#0c1a2e;">{kg_carne:.0f} kg/cab</b> '
-        f'· Consumo MS: <b style="color:#0c1a2e;">{consumo_ms:.0f} kg/cab</b><br>'
-        f'Consumo MV: <b style="color:#0c1a2e;">{consumo_mv:.0f} kg/cab</b>'
-        f' (ciclo)<br>'
-        f'Ración derivada: '
-        f'<b style="color:#0c1a2e;">{rac_ms_dia:.2f} kg MS/día</b> · '
-        f'<b style="color:#0c1a2e;">{rac_mv_dia:.2f} kg MV/día</b>'
+        f'Consumo MS ciclo: <b style="color:#0c1a2e;">{ms_ciclo:,.0f} kg/cab</b> · '
+        f'Consumo MV ciclo: <b style="color:#0c1a2e;">{mv_ciclo:,.0f} kg/cab</b>'
         f'<hr style="border:none;border-top:1px solid #e4eaf4;margin:6px 0;">'
-        f'<b style="color:{color};">Costo alimentación ciclo: '
-        f'USD {costo_cab:.2f}/cab</b>'
+        f'<b style="color:{color};">Costo alimentación: '
+        f'USD {costo_dia:.2f}/cab/día · USD {costo_ciclo:,.2f}/cab ciclo</b>'
         f'</div>',
         unsafe_allow_html=True,
     )
@@ -328,20 +358,22 @@ def _tab_compra_hacienda() -> None:
 
 
 def _tab_alimentacion() -> None:
-    """GDP + conversión + composición de ración por etapa.
+    """GDP + composición de ración por etapa.
 
-    Los días de tenencia son DERIVADOS y aparecen como KPI (no editables):
+    Los días de tenencia son DERIVADOS:
         días = (peso_salida − peso_entrada) / GDP
 
-    El costo y los consumos (MS, MV, por ingrediente) se derivan
-    bioeconómicamente desde la tabla y la conversión (kg MS/kg carne).
+    El costo y los consumos (MS, MV) y la conversión alimenticia (CA)
+    son DERIVADOS desde la tabla de ingredientes (Kg TC × %MS × USD/kg MS).
+    Ya no hay input de CA: la ración es la única fuente nutricional.
     """
     st.markdown(
         '<p style="font-size:0.84rem;color:#475569;margin:-4px 0 14px 0;">'
-        'GDP, conversión y composición de ración por etapa. <b>Los días de '
-        'tenencia se calculan automáticamente</b> a partir de '
-        '(peso salida − peso entrada) ÷ GDP. El costo y los consumos '
-        '(MS y MV) se derivan de la tabla y la conversión.'
+        'GDP y composición de ración por etapa. <b>Los días de tenencia, '
+        'la conversión alimenticia, los consumos (MS y MV) y el costo</b> '
+        'se calculan automáticamente desde la tabla. '
+        'Cargá ingredientes con kg <i>tal cual</i> consumidos por animal '
+        'por día.'
         '</p>',
         unsafe_allow_html=True,
     )
@@ -352,9 +384,6 @@ def _tab_alimentacion() -> None:
             "stage": "cria",
             "color": _SEG["cria"][2],
             "gdp_key":  K.A_GDP,     "gdp_def":  DEFAULTS["a_gdp"],
-            "ca_key":   K.A_CA,      "ca_def":   DEFAULTS["a_ca"],
-            "kg_out_key": K.ANIMAL_PESO_ENTRADA,
-            "kg_out_def": DEFAULTS["peso_inicial"],
             "table_key":  "feed_table_cria",
         },
         "recria": {
@@ -362,9 +391,6 @@ def _tab_alimentacion() -> None:
             "stage": "recria",
             "color": _SEG["recria"][2],
             "gdp_key":  K.B_GDP,     "gdp_def":  DEFAULTS["r_gdp"],
-            "ca_key":   K.B_CA,      "ca_def":   DEFAULTS["r_ca"],
-            "kg_out_key": K.B_PESO_SALIDA,
-            "kg_out_def": DEFAULTS["r_peso_salida"],
             "table_key":  "feed_table_recria",
         },
         "eng_int": {
@@ -372,9 +398,6 @@ def _tab_alimentacion() -> None:
             "stage": "eng_int",
             "color": _SEG["eng_int"][2],
             "gdp_key":  K.C_GDP,     "gdp_def":  DEFAULTS["t_gdp"],
-            "ca_key":   K.C_CA,      "ca_def":   DEFAULTS["t_ca"],
-            "kg_out_key": K.C_PESO_FINAL,
-            "kg_out_def": DEFAULTS["t_peso_final"],
             "table_key":  "feed_table_eng_int",
         },
     }
@@ -389,8 +412,6 @@ def _tab_alimentacion() -> None:
             with col_left:
                 _num("GDP (kg/día)", c["gdp_key"], c["gdp_def"],
                      0.0, 3.0, 0.01, "%.3f")
-                _num("Conversión (kg MS/kg carne)", c["ca_key"], c["ca_def"],
-                     0.0, 30.0, 0.1, "%.1f")
             with col_right:
                 # KPI: días derivado, no editable.
                 dias_calc = D.dias_for(stage)
@@ -419,15 +440,12 @@ def _tab_alimentacion() -> None:
                     unsafe_allow_html=True,
                 )
 
-            kg_in  = D.kg_in_for(stage)
-            kg_out = D.kg_out_for(stage)
-            ca     = D.ca_for(stage)
-            dias   = D.dias_for(stage)
+            dias = D.dias_for(stage)
+            gdp  = D.gdp_for(stage)
 
             _feed_table_block(
                 c["table_key"],
-                kg_in=kg_in, kg_out=kg_out,
-                ca=ca, dias=dias,
+                gdp=gdp, dias=dias,
                 color=c["color"],
             )
 

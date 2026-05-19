@@ -28,7 +28,6 @@ B_PESO_SALIDA   = "r_ps"
 B_PRECIO_VENTA  = "r_pv"
 B_GDP           = "r_gd"
 B_MORTALIDAD    = "r_mo"
-B_CA            = "r_ca"
 B_ING1_PCT      = "r_p1"
 B_ING1_PRECIO   = "r_x1"
 B_ING2_PCT      = "r_p2"
@@ -44,7 +43,6 @@ C_PESO_FINAL    = "t_pf"
 C_PRECIO_VENTA  = "t_pv"
 C_GDP           = "t_gd"
 C_MORTALIDAD    = "t_mo"
-C_CA            = "t_ca"
 C_ING1_PCT      = "t_p1"
 C_ING1_PRECIO   = "t_x1"
 C_ING2_PCT      = "t_p2"
@@ -91,8 +89,10 @@ C_COMISION_PCT  = "c_comision_pct"
 # ── Comercialización — fletes nuevos ──────────────────────────────────────────
 A_FLETE_ENTRADA     = "a_fe"
 
-# ── Conversión Cría (las de B y C ya existen como B_CA / C_CA) ────────────────
-A_CA            = "a_ca"
+# NOTA: la conversión alimenticia (A_CA / B_CA / C_CA) fue eliminada como
+# input editable. Ahora se DERIVA desde la tabla de ración en
+# `modules.state.derived.ca_for(stage) = consumo_MS_dia / GDP`. La única
+# fuente nutricional es la tabla `feed_table_<stage>_de`.
 
 # ── Operación adicional (combustible + servicios) por etapa, USD/mes ─────────
 A_COMBUSTIBLE   = "a_combustible"

@@ -14,13 +14,12 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 import plotly.graph_objects as go
-import pandas as pd
 
 import modules.state.keys as K
 import modules.state.stages as S
 import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
-from modules.state.persist import get_editor_state, read
+from modules.state.persist import read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -41,13 +40,6 @@ _FILLS = {
     "eng_int": ("rgba(13,148,136,0.08)",  "#f0fdfa", "#99f6e4"),
 }
 
-_FEED_EDITOR_KEYS = {
-    "cria":    "feed_table_cria_de",
-    "recria":  "feed_table_recria_de",
-    "eng_int": "feed_table_eng_int_de",
-}
-
-
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     """Convierte '#RRGGBB' a 'rgba(r,g,b,alpha)' para propiedades Plotly
     que NO aceptan el formato hex de 8 caracteres (#RRGGBBAA)."""
@@ -60,9 +52,9 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
 
 def _read_stages() -> dict:
     """Lee parámetros por etapa. kg_in respeta lógica modular (S.kg_in_for).
-    GDP y conversión (CA) son los VALORES CARGADOS por el usuario.
-    El consumo de MS y la ración diaria son DERIVADOS bioeconómicamente
-    (consumo_ms = kg_carne × CA ; rac_dia = consumo_ms / días).
+    GDP es input del usuario. La conversión alimenticia (CA) es DERIVADA
+    de la tabla de ración: CA = consumo_MS_dia / GDP. El consumo MS, MV
+    y el costo también son derivados desde la tabla (kg TC × %MS × USD/kg MS).
     """
     return {
         "cria": {
@@ -71,7 +63,7 @@ def _read_stages() -> dict:
             "dias":    D.dias_for("cria"),
             "mort":    float(read(K.A_MORTALIDAD,   DEFAULTS["d_mortalidad"])),
             "gdp":     float(read(K.A_GDP,          DEFAULTS["a_gdp"])),
-            "ca":      float(read(K.A_CA,           DEFAULTS["a_ca"])),
+            "ca":      D.ca_for("cria"),
             "active":  S.is_active("cria"),
         },
         "recria": {
@@ -80,7 +72,7 @@ def _read_stages() -> dict:
             "dias":    D.dias_for("recria"),
             "mort":    float(read(K.B_MORTALIDAD,   DEFAULTS["r_mortalidad"])),
             "gdp":     float(read(K.B_GDP,          DEFAULTS["r_gdp"])),
-            "ca":      float(read(K.B_CA,           DEFAULTS["r_ca"])),
+            "ca":      D.ca_for("recria"),
             "active":  S.is_active("recria"),
         },
         "eng_int": {
@@ -89,62 +81,15 @@ def _read_stages() -> dict:
             "dias":    D.dias_for("eng_int"),
             "mort":    float(read(K.C_MORTALIDAD,   DEFAULTS["t_mortalidad"])),
             "gdp":     float(read(K.C_GDP,          DEFAULTS["t_gdp"])),
-            "ca":      float(read(K.C_CA,           DEFAULTS["t_ca"])),
+            "ca":      D.ca_for("eng_int"),
             "active":  S.is_active("eng_int"),
         },
     }
 
 
-# ── Feed table helpers ────────────────────────────────────────────────────────
-
-def _empty_feed_df() -> pd.DataFrame:
-    return pd.DataFrame({
-        "Ingrediente": [""] * 10,
-        "%":           [0.0] * 10,
-        "USD/kg MS":   [0.0] * 10,
-    })
-
-
-def _read_feed_df(editor_key: str) -> pd.DataFrame:
-    """
-    Reconstruye el DataFrame de la tabla de alimentación.
-
-    Lee a través de `get_editor_state` para que funcione tanto en
-    Parámetros (donde el widget está activo y ss[editor_key] tiene
-    dict-delta) como en otras slides (donde Streamlit limpió la
-    widget-key y leemos del shadow, que tiene el DataFrame completo).
-    """
-    base = _empty_feed_df()
-    val = get_editor_state(editor_key)
-    if val is None:
-        return base
-    if isinstance(val, pd.DataFrame):
-        return val
-    if isinstance(val, dict):
-        df = base.copy()
-        for idx_str, changes in val.get("edited_rows", {}).items():
-            try:
-                idx = int(idx_str)
-            except (ValueError, TypeError):
-                continue
-            if 0 <= idx < len(df):
-                for col, v in changes.items():
-                    if col in df.columns:
-                        df.at[idx, col] = v
-        return df
-    return base
-
-
-def _active_ingredients(df: pd.DataFrame) -> pd.DataFrame:
-    name = df["Ingrediente"].astype(str).str.strip()
-    pct = pd.to_numeric(df["%"], errors="coerce").fillna(0.0)
-    usd = pd.to_numeric(df["USD/kg MS"], errors="coerce").fillna(0.0)
-    mask = (name != "") & (pct > 0)
-    return pd.DataFrame({
-        "Ingrediente": name[mask].values,
-        "%":           pct[mask].values,
-        "USD/kg MS":   usd[mask].values,
-    })
+# Lectura de la tabla de alimentación: vive en `modules.state.derived`.
+# `D.feed_df_active(stage)` devuelve filas con Ingrediente, Kg TC, %MS,
+# Kg MS y USD/kg MS para los ingredientes cargados.
 
 
 # ── Growth chart — flujo biológico continuo ──────────────────────────────────
@@ -356,12 +301,13 @@ def _animals_section_html(
 
 # ── Sección Alimentos (tabla 6 columnas) ─────────────────────────────────────
 
-def _feed_section_html(
-    editor_key: str, consumo_ms_total: float, dias: int, color: str,
-) -> str:
-    """Tabla de ingredientes con consumo y costo por etapa derivados
-    BIOECONÓMICAMENTE desde consumo_ms_total = kg_carne × CA."""
-    df = _active_ingredients(_read_feed_df(editor_key))
+def _feed_section_html(stage: str, dias: int, color: str) -> str:
+    """Tabla de ingredientes — kg TC/día, kg MS/día, kg MS/etapa y USD/etapa.
+
+    Los valores vienen directamente de la tabla cargada por el usuario
+    (modelo nutricional puro). NO se reparte vía % de participación.
+    """
+    df = D.feed_df_active(stage)
 
     header = (
         f'<div style="font-size:0.66rem;font-weight:700;color:{color};'
@@ -371,7 +317,7 @@ def _feed_section_html(
         f'🌾 Alimentos</div>'
     )
 
-    if df.empty or consumo_ms_total <= 0:
+    if df.empty:
         return (
             f'<div style="margin-top:16px;">{header}'
             f'<div style="border:1.5px dashed {color}33;border-radius:8px;'
@@ -382,24 +328,23 @@ def _feed_section_html(
             f'</div></div>'
         )
 
-    pct_sum = float(df["%"].sum())
-    if pct_sum <= 0:
-        pct_sum = 1.0
-
     rows_html = ""
+    total_tc_dia = 0.0
+    total_ms_dia = 0.0
+    total_usd_etapa = 0.0
     for i, (_, r) in enumerate(df.iterrows()):
-        name = str(r["Ingrediente"]).strip()
-        pct = float(r["%"])
-        usd_kg = float(r["USD/kg MS"])
+        name      = str(r["Ingrediente"]).strip()
+        kg_tc_dia = float(r["Kg TC"])
+        pms       = float(r["%MS"])
+        kg_ms_dia = float(r["Kg MS"])
+        usd_kg    = float(r["USD/kg MS"])
 
-        # Reparto del consumo TOTAL bioeconómico por ingrediente,
-        # normalizando por la suma de % activos (robusto si la tabla
-        # no llega exactamente a 100%).
-        share       = pct / pct_sum
-        kg_ms_etapa = consumo_ms_total * share
-        kg_ms_dia   = kg_ms_etapa / dias if dias > 0 else 0.0
+        kg_ms_etapa = kg_ms_dia * max(dias, 0)
         usd_etapa   = kg_ms_etapa * usd_kg
-        usd_dia     = kg_ms_dia   * usd_kg
+
+        total_tc_dia    += kg_tc_dia
+        total_ms_dia    += kg_ms_dia
+        total_usd_etapa += usd_etapa
 
         bg = "rgba(255,255,255,0.6)" if i % 2 == 0 else "transparent"
         cell = ('padding:5px 6px;font-size:0.72rem;text-align:right;'
@@ -413,13 +358,30 @@ def _feed_section_html(
         rows_html += (
             f'<tr style="background:{bg};">'
             f'<td style="{cell_l}" title="{name}">{name}</td>'
-            f'<td style="{cell}">{pct:.1f}%</td>'
+            f'<td style="{cell}">{kg_tc_dia:.2f}</td>'
+            f'<td style="{cell}">{pms:.1f}%</td>'
             f'<td style="{cell}">{kg_ms_dia:.2f}</td>'
             f'<td style="{cell}">{kg_ms_etapa:.0f}</td>'
-            f'<td style="{cell}">{usd_dia:.3f}</td>'
             f'<td style="{cell_strong}">{usd_etapa:.2f}</td>'
             f'</tr>'
         )
+
+    # Fila TOTAL en pie de tabla
+    tf_base = ('padding:6px 6px;font-size:0.74rem;font-weight:800;'
+               'color:#0c1a2e;font-variant-numeric:tabular-nums;'
+               'white-space:nowrap;')
+    tf_l = tf_base + 'text-align:left;'
+    tf_r = tf_base + 'text-align:right;'
+    total_row = (
+        f'<tr style="background:{color}10;border-top:1.5px solid {color}33;">'
+        f'<td style="{tf_l}">TOTAL</td>'
+        f'<td style="{tf_r}">{total_tc_dia:.2f}</td>'
+        f'<td style="{tf_r}">—</td>'
+        f'<td style="{tf_r}">{total_ms_dia:.2f}</td>'
+        f'<td style="{tf_r}">{total_ms_dia * max(dias, 0):.0f}</td>'
+        f'<td style="{tf_r}">{total_usd_etapa:,.2f}</td>'
+        f'</tr>'
+    )
 
     th_base = (f'padding:5px 6px;font-size:0.60rem;font-weight:700;'
                f'color:{color};white-space:nowrap;text-transform:uppercase;'
@@ -434,13 +396,13 @@ def _feed_section_html(
         f'<thead><tr style="background:{color}18;'
         f'border-bottom:1.5px solid {color}33;">'
         f'<th style="{th_l}">Ingrediente</th>'
-        f'<th style="{th_r}">%</th>'
+        f'<th style="{th_r}">kg TC/día</th>'
+        f'<th style="{th_r}">%MS</th>'
         f'<th style="{th_r}">kg MS/día</th>'
         f'<th style="{th_r}">kg MS/etapa</th>'
-        f'<th style="{th_r}">USD/día</th>'
         f'<th style="{th_r}">USD/etapa</th>'
         f'</tr></thead>'
-        f'<tbody>{rows_html}</tbody>'
+        f'<tbody>{rows_html}{total_row}</tbody>'
         f'</table></div></div>'
     )
 
@@ -526,10 +488,7 @@ def _segment_cards(d: dict) -> None:
         else:
             warnings_html = ""
         feed_html = _feed_section_html(
-            editor_key=_FEED_EDITOR_KEYS[key],
-            consumo_ms_total=consumo,
-            dias=dias,
-            color=color,
+            stage=key, dias=dias, color=color,
         )
 
         # Atenuado para etapas inactivas
@@ -614,7 +573,6 @@ def _consumo_ingredientes_table_html(stage: str, n_cab: int,
     rows_html = ""
     for i, (_, r) in enumerate(df.iterrows()):
         name      = str(r["Ingrediente"]).strip()
-        pct       = float(r["%"])
         pms       = float(r["%MS"])
         kg_ms_cab = float(r["kg_MS_dia"])
         kg_mv_cab = float(r["kg_MV_dia"])
@@ -630,7 +588,6 @@ def _consumo_ingredientes_table_html(stage: str, n_cab: int,
         rows_html += (
             f'<tr style="background:{bg};">'
             f'<td style="{cell_l}" title="{name}">{name}</td>'
-            f'<td style="{cell}">{pct:.1f}%</td>'
             f'<td style="{cell}">{pms:.1f}%</td>'
             f'<td style="{cell}">{kg_ms_cab:.2f}</td>'
             f'<td style="{cell}">{kg_mv_cab:.2f}</td>'
@@ -650,7 +607,6 @@ def _consumo_ingredientes_table_html(stage: str, n_cab: int,
         f'<thead><tr style="background:{color}18;'
         f'border-bottom:1.5px solid {color}33;">'
         f'<th style="{th_l}">Ingrediente</th>'
-        f'<th style="{th_r}">%</th>'
         f'<th style="{th_r}">%MS</th>'
         f'<th style="{th_r}">kg MS/d cab</th>'
         f'<th style="{th_r}">kg MV/d cab</th>'
@@ -765,8 +721,7 @@ def render(params: dict, comp: "Comparador") -> None:
     st.divider()
 
     section("Consumos diarios — MS · MV · por ingrediente")
-    st.caption("Derivados automáticos de GDP × CA (consumo MS), "
-               "%MS ponderado de la ración (consumo MV) y participación "
-               "de cada ingrediente. Total rodeo = consumo/cab × cabezas "
-               "activas en la etapa.")
+    st.caption("Derivados automáticos de la tabla de ración: "
+               "kg MS/cab = Σ (kg TC × %MS/100); kg MV/cab = Σ kg TC. "
+               "Total rodeo = consumo/cab × cabezas activas en la etapa.")
     _consumos_section(d)

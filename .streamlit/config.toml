@@ -1,0 +1,24 @@
+# Configuración aplicada por Streamlit Cloud al deploy.
+# Cualquier cambio acá se aplica tras el siguiente push a main.
+
+[server]
+# No re-correr el script al guardar archivos en local — controlamos cuándo recargar.
+runOnSave = false
+# Necesario en cloud (sin display server).
+headless = true
+# Permite que la app maneje el ciclo de vida de sesión.
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Mostrar errores en pantalla (preferimos visibilidad sobre estética en caso de bug).
+showErrorDetails = true
+# Toolbar mínimo: sin botón "Made with Streamlit" / hamburger expandido.
+toolbarMode = "minimal"
+
+[runner]
+# Re-importa módulos al recargar (evita que módulos cacheados queden pinneados a
+# una versión vieja entre reruns dentro de un mismo proceso).
+fastReruns = true

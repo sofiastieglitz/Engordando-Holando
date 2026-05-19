@@ -69,7 +69,6 @@ def init_state() -> None:
         K.B_PRECIO_VENTA:  COMMERCIAL_DEFAULTS["B"]["precio_venta"],
         K.B_GDP:           ANIMAL_DEFAULTS["B"]["gdp"],
         K.B_MORTALIDAD:    ANIMAL_DEFAULTS["B"]["mortalidad"],
-        K.B_CA:            ANIMAL_DEFAULTS["B"]["ca"],
         K.B_ING1_PCT:      FEED_DEFAULTS["B"]["ing1_pct"],
         K.B_ING1_PRECIO:   FEED_DEFAULTS["B"]["ing1_precio"],
         K.B_ING2_PCT:      FEED_DEFAULTS["B"]["ing2_pct"],
@@ -85,7 +84,6 @@ def init_state() -> None:
         K.C_PRECIO_VENTA:  COMMERCIAL_DEFAULTS["C"]["precio_venta"],
         K.C_GDP:           ANIMAL_DEFAULTS["C"]["gdp"],
         K.C_MORTALIDAD:    ANIMAL_DEFAULTS["C"]["mortalidad"],
-        K.C_CA:            ANIMAL_DEFAULTS["C"]["ca"],
         K.C_ING1_PCT:      FEED_DEFAULTS["C"]["ing1_pct"],
         K.C_ING1_PRECIO:   FEED_DEFAULTS["C"]["ing1_precio"],
         K.C_ING2_PCT:      FEED_DEFAULTS["C"]["ing2_pct"],
@@ -128,8 +126,9 @@ def init_state() -> None:
         # ── Comercialización — fletes nuevos ───────────────────────────────
         K.A_FLETE_ENTRADA:  DEFAULTS["a_fe"],
 
-        # ── Conversión Cría ────────────────────────────────────────────────
-        K.A_CA: DEFAULTS["a_ca"],
+        # NOTA: K.A_CA / K.B_CA / K.C_CA fueron eliminados. La conversión
+        # alimenticia es derivada desde la tabla de ración en
+        # modules.state.derived (no se siembra en session_state).
 
         # ── Operación — combustible + servicios por etapa ──────────────────
         K.A_COMBUSTIBLE: DEFAULTS["a_combustible"],

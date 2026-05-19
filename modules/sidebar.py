@@ -84,7 +84,7 @@ def render_sidebar() -> dict:
             "peso_salida": float(_g(K.B_PESO_SALIDA, DEFAULTS["r_peso_salida"])),
             "gdp":         float(_g(K.B_GDP,         DEFAULTS["r_gdp"])),
             "mortalidad":  float(_g(K.B_MORTALIDAD,  DEFAULTS["r_mortalidad"])) / 100,
-            "ca":          float(_g(K.B_CA,          DEFAULTS["r_ca"])),
+            "ca":          D.ca_for("recria"),
             "sanidad":     float(_g(K.B_SANIDAD,     DEFAULTS["r_sanidad"])),
             "mo_mes":      float(_g(K.B_MO_MES,      DEFAULTS["r_mo_mes"])),
             "dias":        D.dias_for("recria"),
@@ -93,7 +93,7 @@ def render_sidebar() -> dict:
             "peso_final":  float(_g(K.C_PESO_FINAL, DEFAULTS["t_peso_final"])),
             "gdp":         float(_g(K.C_GDP,        DEFAULTS["t_gdp"])),
             "mortalidad":  float(_g(K.C_MORTALIDAD, DEFAULTS["t_mortalidad"])) / 100,
-            "ca":          float(_g(K.C_CA,         DEFAULTS["t_ca"])),
+            "ca":          D.ca_for("eng_int"),
             "sanidad":     float(_g(K.C_SANIDAD,    DEFAULTS["t_sanidad"])),
             "mo_mes":      float(_g(K.C_MO_MES,     DEFAULTS["t_mo_mes"])),
             "dias":        D.dias_for("eng_int"),
@@ -102,31 +102,26 @@ def render_sidebar() -> dict:
 
     # ── Parámetros de alimentación ─────────────────────────────────────────────
     # La fuente de verdad es la feed table editable de page_parametros (modelo
-    # bioeconómico puro). Los keys ing1/2 abajo son legacy para Comparador
-    # (scenarios.py); A ya no se expone porque no tiene equivalente.
-    b_p1 = float(_g(K.B_ING1_PCT,    DEFAULTS["r_ing1_pct"]))
-    b_x1 = float(_g(K.B_ING1_PRECIO, DEFAULTS["r_ing1_precio"]))
-    b_p2 = float(_g(K.B_ING2_PCT,    DEFAULTS["r_ing2_pct"]))
-    b_x2 = float(_g(K.B_ING2_PRECIO, DEFAULTS["r_ing2_precio"]))
-    c_p1 = float(_g(K.C_ING1_PCT,    DEFAULTS["t_ing1_pct"]))
-    c_x1 = float(_g(K.C_ING1_PRECIO, DEFAULTS["t_ing1_precio"]))
-    c_p2 = float(_g(K.C_ING2_PCT,    DEFAULTS["t_ing2_pct"]))
-    c_x2 = float(_g(K.C_ING2_PRECIO, DEFAULTS["t_ing2_precio"]))
-
+    # nutricional puro: Kg TC × %MS × USD/kg MS).
+    #
+    # `precio_alimento` (USD/kg MS ponderado por consumo real) y `ca` se
+    # derivan vía D.precio_ponderado / D.ca_for. Los keys ing1/2 son legacy
+    # para Comparador (scenarios.py) y mantienen sus DEFAULTS (no se usan
+    # en cálculos nuevos).
     feed_params: dict = {
         "B": {
-            "ing1_pct":       b_p1,
-            "ing1_precio":    b_x1,
-            "ing2_pct":       b_p2,
-            "ing2_precio":    b_x2,
-            "precio_alimento": _weighted_price(b_p1, b_x1, b_p2, b_x2),
+            "ing1_pct":       float(_g(K.B_ING1_PCT,    DEFAULTS["r_ing1_pct"])),
+            "ing1_precio":    float(_g(K.B_ING1_PRECIO, DEFAULTS["r_ing1_precio"])),
+            "ing2_pct":       float(_g(K.B_ING2_PCT,    DEFAULTS["r_ing2_pct"])),
+            "ing2_precio":    float(_g(K.B_ING2_PRECIO, DEFAULTS["r_ing2_precio"])),
+            "precio_alimento": D.precio_ponderado("recria"),
         },
         "C": {
-            "ing1_pct":       c_p1,
-            "ing1_precio":    c_x1,
-            "ing2_pct":       c_p2,
-            "ing2_precio":    c_x2,
-            "precio_alimento": _weighted_price(c_p1, c_x1, c_p2, c_x2),
+            "ing1_pct":       float(_g(K.C_ING1_PCT,    DEFAULTS["t_ing1_pct"])),
+            "ing1_precio":    float(_g(K.C_ING1_PRECIO, DEFAULTS["t_ing1_precio"])),
+            "ing2_pct":       float(_g(K.C_ING2_PCT,    DEFAULTS["t_ing2_pct"])),
+            "ing2_precio":    float(_g(K.C_ING2_PRECIO, DEFAULTS["t_ing2_precio"])),
+            "precio_alimento": D.precio_ponderado("eng_int"),
         },
     }
 

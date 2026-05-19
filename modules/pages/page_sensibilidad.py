@@ -16,14 +16,13 @@ from math import isnan
 from typing import TYPE_CHECKING
 
 import streamlit as st
-import pandas as pd
 import plotly.graph_objects as go
 
 import modules.state.keys as K
 import modules.state.stages as S
 import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
-from modules.state.persist import get_editor_state, read
+from modules.state.persist import read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -39,12 +38,6 @@ _SEG = {
                 "color": "#1565c0", "bg": "#eff6ff", "border": "#bfdbfe"},
     "eng_int": {"title": "Engorde", "icon": "🟢",
                 "color": "#0d9488", "bg": "#f0fdfa", "border": "#99f6e4"},
-}
-
-_FEED_KEYS = {
-    "cria":    "feed_table_cria_de",
-    "recria":  "feed_table_recria_de",
-    "eng_int": "feed_table_eng_int_de",
 }
 
 _SEMAPHORE = {
@@ -69,61 +62,21 @@ def _is_nan(x) -> bool:
         return False
 
 
-# ── Lectura de tabla de alimentación ─────────────────────────────────────────
+# ── Lectura de alimentación (todo derivado en modules.state.derived) ─────────
 
-def _read_feed_df(editor_key: str) -> pd.DataFrame:
-    base = pd.DataFrame({
-        "Ingrediente": [""] * 10,
-        "%":           [0.0] * 10,
-        "USD/kg MS":   [0.0] * 10,
-    })
-    val = get_editor_state(editor_key)
-    if val is None:
-        return base
-    if isinstance(val, pd.DataFrame):
-        return val
-    if isinstance(val, dict):
-        df = base.copy()
-        for idx_str, changes in val.get("edited_rows", {}).items():
-            try:
-                idx = int(idx_str)
-            except (ValueError, TypeError):
-                continue
-            if 0 <= idx < len(df):
-                for col, v in changes.items():
-                    if col in df.columns:
-                        df.at[idx, col] = v
-        return df
-    return base
+def _alim_breakdown(stage: str) -> tuple[float, float, float]:
+    """Devuelve (alim_usd_cab, kg_ms_total_cab, precio_usd_kg_ms) para una etapa.
 
-
-def _alim_breakdown(kg_in: float, kg_out: float, ca: float,
-                    feed_key: str) -> tuple[float, float, float]:
-    """Modelo bioeconómico puro:
-        kg_carne    = max(kg_out − kg_in, 0)
-        kg_ms_total = kg_carne × CA            (consumo MS por cab del ciclo)
-        precio_avg  = Σ(% × USD/kg MS) / Σ %
-        alim_usd    = kg_ms_total × precio_avg
-    Devuelve (alim_usd, kg_ms_total, precio_avg).
+    Modelo nutricional puro: los tres valores vienen de la tabla de ración:
+        alim_usd_cab     = Σ (Kg TC × %MS/100 × USD/kg MS) × días
+        kg_ms_total_cab  = Σ (Kg TC × %MS/100) × días
+        precio_usd_kg_ms = alim_usd_cab / kg_ms_total_cab   (= D.precio_ponderado)
     """
-    df = _read_feed_df(feed_key)
-    name = df["Ingrediente"].astype(str).str.strip()
-    pct = pd.to_numeric(df["%"], errors="coerce").fillna(0.0)
-    usd = pd.to_numeric(df["USD/kg MS"], errors="coerce").fillna(0.0)
-    mask = (name != "") & (pct > 0)
-
-    kg_ms_total = max(kg_out - kg_in, 0.0) * max(ca, 0.0)
-    if not mask.any() or kg_ms_total <= 0:
-        return 0.0, kg_ms_total, 0.0
-
-    pcts = pct[mask].values
-    usds = usd[mask].values
-    total_pct = float(pcts.sum())
-    if total_pct <= 0:
-        return 0.0, kg_ms_total, 0.0
-    precio_avg = float((pcts * usds).sum() / total_pct)
-    alim_usd = kg_ms_total * precio_avg
-    return alim_usd, kg_ms_total, precio_avg
+    return (
+        D.costo_alim_cab(stage),
+        D.consumo_ms_cab(stage),
+        D.precio_ponderado(stage),
+    )
 
 
 # ── Lectura de parámetros base ───────────────────────────────────────────────
@@ -138,7 +91,7 @@ def _stage_inputs() -> dict:
     a_mort    = _g(K.A_MORTALIDAD,        DEFAULTS["d_mortalidad"])
     a_san     = _g(K.A_SANIDAD,           DEFAULTS["d_sanidad"])
     a_mo_mes  = _g(K.A_MO_MES,            DEFAULTS["d_mo_mes"])
-    a_ca      = _g(K.A_CA,                DEFAULTS["a_ca"])
+    a_ca      = D.ca_for("cria")
     a_com_pct = _g(K.A_COMISION_PCT,      DEFAULTS["a_comision_pct"])
     a_pv      = _g(K.A_PRECIO_VENTA,      DEFAULTS["d_precio_venta"])
     a_fe      = _g(K.A_FLETE_ENTRADA,     DEFAULTS["a_fe"])
@@ -155,7 +108,7 @@ def _stage_inputs() -> dict:
     b_mort    = _g(K.B_MORTALIDAD,        DEFAULTS["r_mortalidad"])
     b_san     = _g(K.B_SANIDAD,           DEFAULTS["r_sanidad"])
     b_mo_mes  = _g(K.B_MO_MES,            DEFAULTS["r_mo_mes"])
-    b_ca      = _g(K.B_CA,                DEFAULTS["r_ca"])
+    b_ca      = D.ca_for("recria")
     b_com_pct = _g(K.B_COMISION_PCT,      DEFAULTS["b_comision_pct"])
     b_pc      = _g(K.B_PRECIO_COMPRA,     DEFAULTS["b_pc"])
     b_pv      = _g(K.B_PRECIO_VENTA,      DEFAULTS["r_precio_venta"])
@@ -173,7 +126,7 @@ def _stage_inputs() -> dict:
     c_mort    = _g(K.C_MORTALIDAD,        DEFAULTS["t_mortalidad"])
     c_san     = _g(K.C_SANIDAD,           DEFAULTS["t_sanidad"])
     c_mo_mes  = _g(K.C_MO_MES,            DEFAULTS["t_mo_mes"])
-    c_ca      = _g(K.C_CA,                DEFAULTS["t_ca"])
+    c_ca      = D.ca_for("eng_int")
     c_com_pct = _g(K.C_COMISION_PCT,      DEFAULTS["c_comision_pct"])
     c_pc      = _g(K.C_PRECIO_COMPRA,     DEFAULTS["c_pc"])
     c_pv      = _g(K.C_PRECIO_VENTA,      DEFAULTS["t_precio_venta"])
@@ -230,7 +183,7 @@ def _stage_inputs() -> dict:
     return {
         "cria": dict(
             kg_in=a_kg_in, kg_out=a_kg_out, dias=a_dias, mort_pct=a_mort,
-            ca=a_ca, feed_key=_FEED_KEYS["cria"],
+            ca=a_ca, stage="cria",
             compra=pc_global * a_kg_in, san=a_san,
             mo_dia=op_per_cab_dia(a_mo_mes, a_combust, a_servic, cab_in_cria),
             estructura_cab=estructura_cab(a_asig, a_amanos, a_mant,
@@ -240,7 +193,7 @@ def _stage_inputs() -> dict:
         ),
         "recria": dict(
             kg_in=b_kg_in, kg_out=b_kg_out, dias=b_dias, mort_pct=b_mort,
-            ca=b_ca, feed_key=_FEED_KEYS["recria"],
+            ca=b_ca, stage="recria",
             compra=b_pc * b_kg_in, san=b_san,
             mo_dia=op_per_cab_dia(b_mo_mes, b_combust, b_servic, cab_in_recria),
             estructura_cab=estructura_cab(b_asig, b_amanos, b_mant,
@@ -250,7 +203,7 @@ def _stage_inputs() -> dict:
         ),
         "eng_int": dict(
             kg_in=c_kg_in, kg_out=c_kg_out, dias=c_dias, mort_pct=c_mort,
-            ca=c_ca, feed_key=_FEED_KEYS["eng_int"],
+            ca=c_ca, stage="eng_int",
             compra=c_pc * c_kg_in, san=c_san,
             mo_dia=op_per_cab_dia(c_mo_mes, c_combust, c_servic, cab_in_eng_int),
             estructura_cab=estructura_cab(c_asig, c_amanos, c_mant,
@@ -285,9 +238,7 @@ def _compute_breakeven(s: dict) -> dict:
     La mortandad NO se suma como sobrecosto: ya está implícita en la
     asimetría entre cab_in (incurre el costo) y cab_vend (genera ingreso).
     """
-    alim_actual, kg_ms_total, precio_alim_actual = _alim_breakdown(
-        s["kg_in"], s["kg_out"], s["ca"], s["feed_key"]
-    )
+    alim_actual, kg_ms_total, precio_alim_actual = _alim_breakdown(s["stage"])
     op_cab    = s["mo_dia"] * s["dias"]                        # USD/cab
     estr_cab  = s.get("estructura_cab", 0.0)                   # USD/cab
     com_cab   = (s["com_pct"] / 100.0) * s["pv"] * s["kg_out"] + s["fe"] + s["fs"]

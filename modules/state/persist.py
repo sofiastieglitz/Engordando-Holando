@@ -55,24 +55,26 @@ PERSISTENT_KEYS: list[str] = [
     K.STAGE_ENG_ON,
 
     # Cría (A) — días NO se persiste: es derivado (D.dias_for("cria"))
+    # CA tampoco se persiste: es derivada de la tabla de ración
+    # (D.ca_for("cria")).
     K.A_MORTALIDAD, K.A_SANIDAD, K.A_MO_MES,
     K.A_FLETE_ENTRADA, K.A_FLETE_SALIDA, K.A_OTROS,
-    K.A_KG_ENTRADA, K.A_GDP, K.A_COMISION_PCT, K.A_CA,
+    K.A_KG_ENTRADA, K.A_GDP, K.A_COMISION_PCT,
     K.A_COMBUSTIBLE, K.A_SERVICIOS,
     K.A_ASIG_PCT, K.A_AMORT_ANOS, K.A_MANTENIMIENTO,
     K.A_PRECIO_VENTA,
 
-    # Recría (B) — días NO se persiste
+    # Recría (B) — días NO se persiste; CA tampoco (derivada).
     K.B_PESO_SALIDA, K.B_PRECIO_VENTA, K.B_GDP, K.B_MORTALIDAD,
-    K.B_CA, K.B_ING1_PCT, K.B_ING1_PRECIO, K.B_ING2_PCT, K.B_ING2_PRECIO,
+    K.B_ING1_PCT, K.B_ING1_PRECIO, K.B_ING2_PCT, K.B_ING2_PRECIO,
     K.B_SANIDAD, K.B_MO_MES, K.B_FLETE_ENTRADA, K.B_FLETE_SALIDA, K.B_OTROS,
     K.B_KG_ENTRADA, K.B_PRECIO_COMPRA, K.B_COMISION_PCT,
     K.B_COMBUSTIBLE, K.B_SERVICIOS,
     K.B_ASIG_PCT, K.B_AMORT_ANOS, K.B_MANTENIMIENTO,
 
-    # Engorde (C) — días NO se persiste
+    # Engorde (C) — días NO se persiste; CA tampoco (derivada).
     K.C_PESO_FINAL, K.C_PRECIO_VENTA, K.C_GDP, K.C_MORTALIDAD,
-    K.C_CA, K.C_ING1_PCT, K.C_ING1_PRECIO, K.C_ING2_PCT, K.C_ING2_PRECIO,
+    K.C_ING1_PCT, K.C_ING1_PRECIO, K.C_ING2_PCT, K.C_ING2_PRECIO,
     K.C_SANIDAD, K.C_MO_MES, K.C_FLETE_ENTRADA, K.C_FLETE_SALIDA, K.C_OTROS,
     K.C_KG_ENTRADA, K.C_PRECIO_COMPRA, K.C_COMISION_PCT,
     K.C_COMBUSTIBLE, K.C_SERVICIOS,

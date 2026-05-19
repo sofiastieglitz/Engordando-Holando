@@ -42,6 +42,43 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Si `streamlit` no está en el PATH:
+
+```bash
+python -m streamlit run app.py
+```
+
+## Deployment
+
+La app está publicada en **<https://engordando-holando.streamlit.app/>** vía Streamlit Community Cloud, conectado a este repo en la branch `main`.
+
+**Cada push a `main` redeploya automáticamente** (~1-2 min). No hay paso manual de deploy.
+
+### Cómo publicar cambios
+
+```powershell
+.\scripts\deploy.ps1 "mensaje del commit"
+```
+
+El script muestra los cambios, pide confirmación, hace `add + commit + push` y avisa la URL. Para saltearse la confirmación: `-Force`.
+
+### Verificar qué versión está publicada
+
+Mirá el footer del sidebar: muestra el commit hash + fecha del último deploy (ej. `b50cba2 · 2026-05-19 14:15`). Si el hash coincide con `git rev-parse --short HEAD` local, estás viendo lo último.
+
+### Si seguís viendo la versión vieja
+
+1. Esperá 2 min — Streamlit Cloud tarda en rebuildear.
+2. Hacé **Ctrl+F5** (Windows) o **Cmd+Shift+R** (Mac) — bypass del cache del navegador.
+3. Verificá el hash en el sidebar contra `git rev-parse --short HEAD`.
+4. Si el hash remoto sigue siendo viejo, revisá los logs en <https://share.streamlit.io/> (probablemente falló un import o el requirements).
+
+### Importante sobre persistencia de parámetros
+
+Los parámetros que el usuario edita viven en `st.session_state` y persisten **mientras dura la sesión del navegador**. Un redeploy mata las sesiones activas (limitación de Streamlit Cloud sin DB externa); los valores ingresados antes del redeploy se pierden. Esto es comportamiento esperado y no se puede evitar sin agregar infraestructura adicional.
+
+El sistema de shadow-keys (`modules/state/persist.py`) garantiza que los parámetros **sobrevivan a la navegación entre páginas** dentro de la misma sesión — eso sí está cubierto.
+
 ## Navegación
 
 | Tab | Descripción |

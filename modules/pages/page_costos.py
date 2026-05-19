@@ -12,13 +12,12 @@ from typing import TYPE_CHECKING
 
 import streamlit as st
 import plotly.graph_objects as go
-import pandas as pd
 
 import modules.state.keys as K
 import modules.state.stages as S
 import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
-from modules.state.persist import get_editor_state, read
+from modules.state.persist import read
 from modules.pages.ui import page_header, section
 
 if TYPE_CHECKING:
@@ -34,12 +33,6 @@ _SEG = {
                 "color": "#1565c0", "bg": "#eff6ff", "border": "#bfdbfe"},
     "eng_int": {"title": "Engorde", "icon": "🟢",
                 "color": "#0d9488", "bg": "#f0fdfa", "border": "#99f6e4"},
-}
-
-_FEED_KEYS = {
-    "cria":    "feed_table_cria_de",
-    "recria":  "feed_table_recria_de",
-    "eng_int": "feed_table_eng_int_de",
 }
 
 # Paleta suave SaaS/agtech para el desglose de conceptos.
@@ -82,66 +75,10 @@ def _g(key: str, default: float) -> float:
     return float(read(key, default))
 
 
-def _read_feed_df(editor_key: str) -> pd.DataFrame:
-    """Reconstruye el DataFrame de la tabla de alimentación.
-
-    Lee vía `get_editor_state`, que devuelve el valor del widget si está
-    presente o el shadow si Streamlit lo eliminó (navegación). Esto
-    asegura que los costos siempre vean la última ración del usuario,
-    incluso desde slides distintas a Parámetros.
-    """
-    base = pd.DataFrame({
-        "Ingrediente": [""] * 10,
-        "%":           [0.0] * 10,
-        "USD/kg MS":   [0.0] * 10,
-    })
-    val = get_editor_state(editor_key)
-    if val is None:
-        return base
-    if isinstance(val, pd.DataFrame):
-        return val
-    if isinstance(val, dict):
-        df = base.copy()
-        for idx_str, changes in val.get("edited_rows", {}).items():
-            try:
-                idx = int(idx_str)
-            except (ValueError, TypeError):
-                continue
-            if 0 <= idx < len(df):
-                for col, v in changes.items():
-                    if col in df.columns:
-                        df.at[idx, col] = v
-        return df
-    return base
-
-
-def _alim_usd_cab(kg_in: float, kg_out: float, ca: float,
-                  feed_key: str) -> float:
-    """USD/cab de alimentación — modelo bioeconómico puro.
-
-    consumo_MS = max(kg_out − kg_in, 0) × CA
-    precio_pond = Σ(% × USD/kg MS) / Σ %
-    costo_cab  = consumo_MS × precio_pond
-
-    Si la tabla está vacía o no hay kg producidos, devuelve 0.
-    """
-    df = _read_feed_df(feed_key)
-    name = df["Ingrediente"].astype(str).str.strip()
-    pct = pd.to_numeric(df["%"], errors="coerce").fillna(0.0)
-    usd = pd.to_numeric(df["USD/kg MS"], errors="coerce").fillna(0.0)
-    mask = (name != "") & (pct > 0)
-
-    consumo_ms = max(kg_out - kg_in, 0.0) * max(ca, 0.0)
-    if not mask.any() or consumo_ms <= 0:
-        return 0.0
-
-    pcts = pct[mask].values
-    usds = usd[mask].values
-    total_pct = float(pcts.sum())
-    if total_pct <= 0:
-        return 0.0
-    precio_pond = float((pcts * usds).sum() / total_pct)
-    return float(consumo_ms * precio_pond)
+# El cálculo del costo de alimentación vive en `modules.state.derived`:
+#   D.costo_alim_cab(stage) = Σ (Kg TC × %MS/100 × USD/kg MS) × días
+# Se lee directamente desde la tabla del usuario (modelo nutricional puro,
+# sin CA ni % en ración como inputs).
 
 
 # ── Modelo de costos por etapa ───────────────────────────────────────────────
@@ -180,7 +117,6 @@ def _build_costos() -> dict:
     a_mort    = _g(K.A_MORTALIDAD,        DEFAULTS["d_mortalidad"])
     a_san     = _g(K.A_SANIDAD,           DEFAULTS["d_sanidad"])
     a_mo_mes  = _g(K.A_MO_MES,            DEFAULTS["d_mo_mes"])
-    a_ca      = _g(K.A_CA,                DEFAULTS["a_ca"])
     a_com_pct = _g(K.A_COMISION_PCT,      DEFAULTS["a_comision_pct"])
     a_pv      = _g(K.A_PRECIO_VENTA,      DEFAULTS["d_precio_venta"])
     a_fe      = _g(K.A_FLETE_ENTRADA,     DEFAULTS["a_fe"])
@@ -197,7 +133,6 @@ def _build_costos() -> dict:
     b_mort    = _g(K.B_MORTALIDAD,        DEFAULTS["r_mortalidad"])
     b_san     = _g(K.B_SANIDAD,           DEFAULTS["r_sanidad"])
     b_mo_mes  = _g(K.B_MO_MES,            DEFAULTS["r_mo_mes"])
-    b_ca      = _g(K.B_CA,                DEFAULTS["r_ca"])
     b_com_pct = _g(K.B_COMISION_PCT,      DEFAULTS["b_comision_pct"])
     b_pc      = _g(K.B_PRECIO_COMPRA,     DEFAULTS["b_pc"])
     b_pv      = _g(K.B_PRECIO_VENTA,      DEFAULTS["r_precio_venta"])
@@ -215,7 +150,6 @@ def _build_costos() -> dict:
     c_mort    = _g(K.C_MORTALIDAD,        DEFAULTS["t_mortalidad"])
     c_san     = _g(K.C_SANIDAD,           DEFAULTS["t_sanidad"])
     c_mo_mes  = _g(K.C_MO_MES,            DEFAULTS["t_mo_mes"])
-    c_ca      = _g(K.C_CA,                DEFAULTS["t_ca"])
     c_com_pct = _g(K.C_COMISION_PCT,      DEFAULTS["c_comision_pct"])
     c_pc      = _g(K.C_PRECIO_COMPRA,     DEFAULTS["c_pc"])
     c_pv      = _g(K.C_PRECIO_VENTA,      DEFAULTS["t_precio_venta"])
@@ -304,7 +238,7 @@ def _build_costos() -> dict:
             kg_in=a_kg_in, kg_out=a_kg_out, dias=a_dias, mort_pct=a_mort,
             precio_venta=a_pv,
             compra  = pc_global * a_kg_in,
-            alim    = _alim_usd_cab(a_kg_in, a_kg_out, a_ca, _FEED_KEYS["cria"]),
+            alim    = D.costo_alim_cab("cria"),
             sanidad = a_san,
             op      = op_cab(a_mo_mes, a_combust, a_servic, a_dias, cab_cria),
             estr    = estructura_cab(a_asig, a_amanos, a_mant, a_dias, cab_cria),
@@ -316,7 +250,7 @@ def _build_costos() -> dict:
             kg_in=b_kg_in, kg_out=b_kg_out, dias=b_dias, mort_pct=b_mort,
             precio_venta=b_pv,
             compra  = b_pc * b_kg_in,
-            alim    = _alim_usd_cab(b_kg_in, b_kg_out, b_ca, _FEED_KEYS["recria"]),
+            alim    = D.costo_alim_cab("recria"),
             sanidad = b_san,
             op      = op_cab(b_mo_mes, b_combust, b_servic, b_dias, cab_recria),
             estr    = estructura_cab(b_asig, b_amanos, b_mant, b_dias, cab_recria),
@@ -328,7 +262,7 @@ def _build_costos() -> dict:
             kg_in=c_kg_in, kg_out=c_kg_out, dias=c_dias, mort_pct=c_mort,
             precio_venta=c_pv,
             compra  = c_pc * c_kg_in,
-            alim    = _alim_usd_cab(c_kg_in, c_kg_out, c_ca, _FEED_KEYS["eng_int"]),
+            alim    = D.costo_alim_cab("eng_int"),
             sanidad = c_san,
             op      = op_cab(c_mo_mes, c_combust, c_servic, c_dias, cab_eng_int),
             estr    = estructura_cab(c_asig, c_amanos, c_mant, c_dias, cab_eng_int),
