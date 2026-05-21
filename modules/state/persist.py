@@ -30,6 +30,7 @@ llamar a `reset_to_defaults()` explícitamente.
 from __future__ import annotations
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 import modules.state.keys as K
@@ -94,6 +95,18 @@ EDITOR_KEYS: list[str] = [
     "feed_table_cria_de",
     "feed_table_recria_de",
     "feed_table_eng_int_de",
+]
+
+# Keys del "seed" estable que se le pasa como `data=` a cada st.data_editor.
+# Existe para que `data=` no cambie de contenido entre reruns dentro de una
+# misma visita a la página (ver el bloque crítico en
+# `_feed_table_block` en page_parametros.py: el `element_id` del data_editor
+# se hashea sobre `data=arrow_bytes`, así que cambiar `data=` muta el id y
+# borra la delta pendiente del usuario).
+SEED_KEYS: list[str] = [
+    "_de_seed_feed_table_cria",
+    "_de_seed_feed_table_recria",
+    "_de_seed_feed_table_eng_int",
 ]
 
 # Widget-keys de page_reportes (text_input, date_input, checkbox).
@@ -196,24 +209,58 @@ def restore_from_backing() -> None:
             ss[k] = ss[b]
 
 
+def get_editor_shadow(editor_key: str) -> pd.DataFrame | None:
+    """Devuelve SÓLO el shadow del editor como DataFrame, o None.
+
+    Es lo que SIEMPRE hay que pasarle a `st.data_editor(data=...)`
+    como baseline. Razón:
+      - Streamlit guarda en `ss[editor_key]` SOLO una delta-dict
+        (`edited_rows` / `added_rows` / `deleted_rows`), NUNCA el
+        DataFrame completo.
+      - El shadow (`_persist_<editor_key>`) sí es el DataFrame completo
+        del último save, no es widget-key, y sobrevive a la navegación.
+      - Si volvemos a Parámetros y el widget se re-instancia, la delta
+        arranca vacía y el `data=` que pasemos es la ÚNICA fuente de
+        las filas previas. Si no pasamos el shadow, esas filas se
+        pierden silenciosamente cuando el usuario edita una nueva.
+
+    NO MODIFICAR el comportamiento de esta función: cualquier
+    consumidor que reciba algo distinto al shadow puede perder los
+    datos del usuario en el siguiente edit.
+    """
+    val = st.session_state.get(_backing(editor_key))
+    return val if isinstance(val, pd.DataFrame) else None
+
+
 def get_editor_state(editor_key: str) -> Any:
-    """Devuelve el estado más fresco de un st.data_editor.
+    """Devuelve el estado más fresco y COMPLETO de un st.data_editor.
 
-    - Si ss[editor_key] existe (el widget se renderó en este rerun), lo
-      devuelve directamente. Puede ser un dict-delta o un DataFrame.
-    - Si NO existe (Streamlit lo eliminó porque navegamos a otra slide),
-      cae al shadow store, que mantiene el último estado completo guardado
-      por `_feed_table_block` después de cada render.
+    Política (post-fix bug navegación):
+      1. Si existe el shadow (DataFrame completo del último save de
+         `_feed_table_block`), lo devolvemos. Es la fuente de verdad.
+      2. Si no hay shadow pero sí `ss[editor_key]` (delta-dict de un
+         widget vivo en la PRIMERA sesión, antes del primer save),
+         devolvemos el dict — los consumidores saben aplicarlo a un
+         DataFrame vacío.
+      3. Si no hay nada, None.
 
-    Usado por todos los consumidores (page_costos, page_margenes,
-    page_modelo_productivo, page_sensibilidad) para leer la tabla de
-    ración sin depender de la widget-key (cuya persistencia es
-    administrada por Streamlit y se pierde al navegar).
+    Por qué priorizar el shadow sobre `ss[editor_key]`:
+      Streamlit guarda en `ss[editor_key]` SOLO la delta (no el DF
+      completo). Después de navegar fuera y volver, Streamlit re-
+      instancia el widget con un delta vacío, y los datos previos
+      viven SOLO en el shadow. Leer la delta en ese caso devolvería
+      datos parciales (o vacíos) → pérdida silenciosa de filas
+      cargadas previamente por el usuario.
+
+    NO MODIFICAR esta prioridad: invertirla causa pérdida de datos
+    en consumidores (page_costos, page_margenes, sidebar) al navegar
+    entre páginas.
     """
     ss = st.session_state
-    if editor_key in ss:
-        return ss[editor_key]
-    return ss.get(_backing(editor_key))
+    shadow = ss.get(_backing(editor_key))
+    if isinstance(shadow, pd.DataFrame):
+        return shadow
+    return ss.get(editor_key)
 
 
 def save_editor_state(editor_key: str, value: Any) -> None:
@@ -281,6 +328,10 @@ def reset_to_defaults() -> None:
     En el próximo rerun, `init_state()` re-aplicará los defaults a las
     keys faltantes (las propias del dashboard). Útil para el botón
     'Restablecer defaults'.
+
+    Los `SEED_KEYS` también se limpian: en el próximo render del
+    data_editor, `editor_key not in ss` será True y el seed se
+    reconstruirá desde el shadow vacío → tabla limpia.
     """
     ss = st.session_state
     for k in (list(PERSISTENT_KEYS)
@@ -288,3 +339,5 @@ def reset_to_defaults() -> None:
               + list(REPORT_KEYS)):
         ss.pop(k, None)
         ss.pop(_backing(k), None)
+    for k in SEED_KEYS:
+        ss.pop(k, None)

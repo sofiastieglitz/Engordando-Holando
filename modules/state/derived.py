@@ -33,7 +33,7 @@ import streamlit as st
 
 import modules.state.keys as K
 import modules.state.stages as S
-from modules.state.persist import get_editor_state, read
+from modules.state.persist import get_editor_shadow, read
 
 
 # ── Mapeo etapa → claves de session_state ────────────────────────────────────
@@ -137,23 +137,55 @@ def migrate_feed_df(df: pd.DataFrame, rows: int = _FEED_ROWS) -> pd.DataFrame:
 
 
 def _read_feed_raw(stage: str) -> pd.DataFrame:
-    """DataFrame crudo del shadow (10 filas, schema canónico)."""
-    val = get_editor_state(_FEED_EDITOR_KEY[stage])
-    if isinstance(val, pd.DataFrame):
-        return migrate_feed_df(val)
-    if isinstance(val, dict):
-        df = _empty_feed_df()
-        for idx_str, changes in val.get("edited_rows", {}).items():
+    """Estado actual del editor de ración (10 filas, schema canónico).
+
+    Estrategia: SHADOW (baseline completo del último save) + DELTA del
+    widget aplicada por encima. La delta-on-top permite capturar incluso
+    edits que el usuario tipeó pero todavía no se commitearon al shadow.
+
+    Race-condition que esto cubre:
+      El usuario tipea en una celda de la tabla en Parámetros y, sin
+      blurear, clickea otra slide en el nav. Streamlit:
+        1) Captura el nuevo valor en `ss[editor_key]` (delta).
+        2) Cambia la página activa al destino del nav.
+        3) Dispara UN rerun para la nueva página.
+      En ese rerun, `_feed_table_block` NO corre, por lo que el shadow
+      no se actualiza. Si leyéramos sólo el shadow, los consumidores
+      (sidebar / page_costos / page_margenes) recibirían el estado
+      pre-tipeo y mostrarían cálculos desfasados. Aplicar la delta
+      sobre el shadow elimina ese desfase.
+
+    Reglas de seguridad de datos (NO MODIFICAR):
+      - La base SIEMPRE es el shadow (no un DataFrame vacío). Si no
+        existe shadow, recién ahí caemos a un DF vacío de 10 filas.
+      - La delta sólo puede *modificar* celdas existentes; con
+        `num_rows="fixed"` no hay `added_rows` ni `deleted_rows` que
+        deban procesarse. Si en el futuro se permite agregar filas,
+        agregar esa lógica acá Y mantener el shadow como la fuente
+        de verdad de filas previas.
+    """
+    editor_key = _FEED_EDITOR_KEY[stage]
+
+    # 1) Base: shadow (DF completo del último save) o DF vacío de 10 filas.
+    shadow = get_editor_shadow(editor_key)
+    base = migrate_feed_df(shadow) if shadow is not None else _empty_feed_df()
+
+    # 2) Aplicar delta-dict del widget vivo (si la hay) sobre el shadow.
+    delta = st.session_state.get(editor_key)
+    if isinstance(delta, dict):
+        out = base.copy()
+        for idx_str, changes in delta.get("edited_rows", {}).items():
             try:
                 idx = int(idx_str)
             except (ValueError, TypeError):
                 continue
-            if 0 <= idx < len(df):
+            if 0 <= idx < len(out):
                 for col, v in changes.items():
-                    if col in df.columns:
-                        df.at[idx, col] = v
-        return migrate_feed_df(df)
-    return _empty_feed_df()
+                    if col in out.columns:
+                        out.at[idx, col] = v
+        return migrate_feed_df(out)
+
+    return base
 
 
 def feed_df_active(stage: str) -> pd.DataFrame:

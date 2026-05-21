@@ -364,14 +364,18 @@ def _all_semaphores(s: dict) -> dict:
     out["precio_eq"] = {**_sem_for(h, 30, 10),
                         "headroom": h, "value": pe, "ref": pv}
 
-    # Maíz / precio alim: headroom = (max / actual − 1) × 100
+    # Precio ración: headroom = (max / actual − 1) × 100
+    # OJO: el "máximo tolerable" se aplica como shock uniforme sobre TODA
+    # la ración (USD/kg MS promedio), no sobre un ingrediente específico.
+    # Refleja la exposición al precio promedio de la dieta cargada por el
+    # usuario en Parámetros → 🌾 Alimentación.
     pa_max, pa_act = s["precio_alim_max"], s["precio_alim_actual"]
     if pa_act > 0 and not _is_nan(pa_max):
         h = (pa_max / pa_act - 1.0) * 100.0
     else:
         h = None
-    out["maiz_max"] = {**_sem_for(h, 50, 20),
-                       "headroom": h, "value": pa_max, "ref": pa_act}
+    out["racion_max"] = {**_sem_for(h, 50, 20),
+                         "headroom": h, "value": pa_max, "ref": pa_act}
 
     # GDP mínimo: headroom = (actual − min) / actual × 100
     gdp_min, gdp_act = s["gdp_min"], s["gdp_actual"]
@@ -494,13 +498,13 @@ def _stage_card_html(key: str, s: dict) -> str:
         hr_pct(sems["precio_eq"]["headroom"]),
         sems["precio_eq"],
     )
-    # Maíz / precio alim
+    # Precio ración (USD/kg MS promedio, no un ingrediente específico)
     rows += _metric_row(
-        "🌽", "Maíz máx. tolerable",
-        _fmt(sems["maiz_max"]["value"], "usd_kg_ms"),
-        _fmt(sems["maiz_max"]["ref"], "usd_kg_ms"),
-        hr_pct(sems["maiz_max"]["headroom"]),
-        sems["maiz_max"],
+        "🌾", "Precio ración máx.",
+        _fmt(sems["racion_max"]["value"], "usd_kg_ms"),
+        _fmt(sems["racion_max"]["ref"], "usd_kg_ms"),
+        hr_pct(sems["racion_max"]["headroom"]),
+        sems["racion_max"],
     )
     # GDP mínimo
     rows += _metric_row(
@@ -584,14 +588,23 @@ def _stage_grid(data: dict) -> None:
 
 # Variables a sensibilizar (delta_kind: 'rel' = porcentaje relativo,
 # 'pp' = puntos porcentuales absolutos). Alineadas con el modelo
-# bioeconómico actual: compra y venta de hacienda, dieta (maíz),
-# productividad (GDP), riesgo sanitario (mortandad) y logística (flete).
+# bioeconómico actual: compra y venta de hacienda, precio promedio de
+# la ración (USD/kg MS), productividad (GDP), riesgo sanitario
+# (mortandad) y logística (flete).
+#
+# OJO: `precio_racion` aplica un shock UNIFORME sobre el costo total de
+# alimentación de la etapa (`s["alim_actual"]` ya viene como Σ de los
+# ingredientes cargados por el usuario en Parámetros → 🌾 Alimentación).
+# No hay supuestos de composición de balanceado ni de exposición a
+# ingredientes no cargados. Si la ración es 100% balanceado, el slider
+# mueve el precio del balanceado; si hay maíz + silo + soja, mueve los
+# tres en igual proporción.
 _TORNADO_VARS = [
     {"key": "precio_compra", "label": "Precio compra", "icon": "🛒",
      "delta": 0.20, "kind": "rel"},
     {"key": "precio_venta",  "label": "Precio venta",  "icon": "💲",
      "delta": 0.20, "kind": "rel"},
-    {"key": "precio_maiz",   "label": "Precio maíz",   "icon": "🌽",
+    {"key": "precio_racion", "label": "Precio ración", "icon": "🌾",
      "delta": 0.20, "kind": "rel"},
     {"key": "gdp",           "label": "GDP",           "icon": "📈",
      "delta": 0.15, "kind": "rel"},
@@ -606,7 +619,9 @@ def _evaluate_with_overrides(s: dict, ov: dict) -> dict:
     Recalcula métricas con un dict de overrides. Claves opcionales:
         precio_compra_mult   (default 1.0)  — multiplica compra/cab
         precio_venta_mult    (default 1.0)  — multiplica pv (ingreso + comisión)
-        precio_maiz_mult     (default 1.0)  — multiplica alim cab
+        precio_racion_mult   (default 1.0)  — multiplica alim cab (shock
+                                              proporcional sobre TODA la
+                                              ración, USD/kg MS promedio)
         gdp_mult             (default 1.0)  — escala kg_aumento (y alim)
         mort_pp_delta        (default 0.0)  — suma pp a mort
         flete_mult           (default 1.0)  — multiplica fe + fs
@@ -623,8 +638,10 @@ def _evaluate_with_overrides(s: dict, ov: dict) -> dict:
     compra      = s["compra"] * ov.get("precio_compra_mult", 1.0)
     # Bioeconómico: alim escala con kg_carne × CA × precio_pond_dieta.
     # GDP afecta kg_carne (kg_aumento), así que también multiplica alim.
+    # `precio_racion_mult` es un shock uniforme sobre USD/kg MS promedio
+    # de la ración cargada — no es un ingrediente específico.
     alim        = (s["alim_actual"]
-                   * ov.get("precio_maiz_mult", 1.0)
+                   * ov.get("precio_racion_mult", 1.0)
                    * ov.get("gdp_mult", 1.0))
     fe          = s["fe"] * ov.get("flete_mult", 1.0)
     fs          = s["fs"] * ov.get("flete_mult", 1.0)
@@ -673,8 +690,8 @@ def _evaluate_metric(s: dict, override_key: str | None, sign: int) -> dict:
         ov["precio_compra_mult"] = 1.0 + sign * 0.20
     elif override_key == "precio_venta":
         ov["precio_venta_mult"]  = 1.0 + sign * 0.20
-    elif override_key == "precio_maiz":
-        ov["precio_maiz_mult"]   = 1.0 + sign * 0.20
+    elif override_key == "precio_racion":
+        ov["precio_racion_mult"] = 1.0 + sign * 0.20
     elif override_key == "gdp":
         ov["gdp_mult"]           = 1.0 + sign * 0.15
     elif override_key == "mortandad":
@@ -811,8 +828,10 @@ _SLIDER_CONFIGS = [
     {"key": "precio_venta",  "label": "Precio venta",       "icon": "💲",
      "min": -30.0, "max": 30.0, "default": 0.0, "step": 1.0,
      "fmt": "%+.0f%%", "group": "Hacienda"},
-    # Productividad y dieta
-    {"key": "precio_maiz",   "label": "Precio maíz",        "icon": "🌽",
+    # Productividad y dieta — "Precio ración" es el promedio USD/kg MS
+    # de la dieta cargada; mueve TODOS los ingredientes uniformemente,
+    # no asume composición específica.
+    {"key": "precio_racion", "label": "Precio ración",      "icon": "🌾",
      "min": -30.0, "max": 30.0, "default": 0.0, "step": 1.0,
      "fmt": "%+.0f%%", "group": "Productividad"},
     {"key": "gdp",           "label": "GDP / ADPV",         "icon": "📈",
@@ -832,7 +851,7 @@ _SLIDER_KEY_FMT = "sens_sim_{key}"
 _SLIDER_TO_OVERRIDE = {
     "precio_compra": ("precio_compra_mult", "rel"),
     "precio_venta":  ("precio_venta_mult",  "rel"),
-    "precio_maiz":   ("precio_maiz_mult",   "rel"),
+    "precio_racion": ("precio_racion_mult", "rel"),
     "gdp":           ("gdp_mult",           "rel"),
     "mortandad":     ("mort_pp_delta",      "pp"),
     "flete":         ("flete_mult",         "rel"),
@@ -1013,7 +1032,7 @@ _RISK_TITLES = {
 
 # Pesos de los componentes del score compuesto (deben sumar 1.0)
 _RISK_WEIGHTS = {
-    "maiz":        0.20,
+    "racion":      0.20,
     "volatilidad": 0.25,
     "duracion":    0.15,
     "capital":     0.20,
@@ -1036,7 +1055,7 @@ def _compute_risk_components(s: dict, baseline: float,
     Calcula cada componente del riesgo (0-100, mayor = más riesgoso).
 
     Componentes:
-      score_maiz        = swing(precio maíz) / |baseline| × 50, cap 100
+      score_racion      = swing(precio ración) / |baseline| × 50, cap 100
       score_volatilidad = Σswings / |baseline| × 30, cap 100
       score_duracion    = días / 7.30 (730 d = 100), cap 100
       score_capital     = capital_etapa / max(capital peers) × 100
@@ -1044,13 +1063,15 @@ def _compute_risk_components(s: dict, baseline: float,
     """
     denom = _safe_denom(baseline, s["ingreso_cab"])
 
-    # Sensibilidad al maíz
-    maiz_row = next((r for r in tornado_rows if "Precio maíz" in r["var_label"]),
-                    None)
-    if maiz_row is not None:
-        score_maiz = min(100.0, (maiz_row["swing"] / denom) * 50.0)
+    # Sensibilidad al precio promedio de la ración (USD/kg MS).
+    # Matcheamos por `key` interno — no por label — para no acoplar este
+    # cálculo al texto visible del tornado.
+    racion_row = next((r for r in tornado_rows if r.get("key") == "precio_racion"),
+                     None)
+    if racion_row is not None:
+        score_racion = min(100.0, (racion_row["swing"] / denom) * 50.0)
     else:
-        score_maiz = 0.0
+        score_racion = 0.0
 
     # Volatilidad: suma total de swings de las 7 variables
     total_swing = sum(r["swing"] for r in tornado_rows)
@@ -1068,7 +1089,7 @@ def _compute_risk_components(s: dict, baseline: float,
     score_mortandad = min(100.0, s["mort_pct"] * 10.0)
 
     composite = (
-        score_maiz        * _RISK_WEIGHTS["maiz"]
+        score_racion      * _RISK_WEIGHTS["racion"]
         + score_volatilidad * _RISK_WEIGHTS["volatilidad"]
         + score_duracion    * _RISK_WEIGHTS["duracion"]
         + score_capital     * _RISK_WEIGHTS["capital"]
@@ -1077,7 +1098,7 @@ def _compute_risk_components(s: dict, baseline: float,
     robustness = max(0.0, min(100.0, 100.0 - composite))
 
     return {
-        "score_maiz":        score_maiz,
+        "score_racion":      score_racion,
         "score_volatilidad": score_volatilidad,
         "score_duracion":    score_duracion,
         "score_capital":     score_capital,
@@ -1085,7 +1106,7 @@ def _compute_risk_components(s: dict, baseline: float,
         "risk_composite":    composite,
         "robustness":        robustness,
         "total_swing":       total_swing,
-        "maiz_swing":        maiz_row["swing"] if maiz_row else 0.0,
+        "racion_swing":      racion_row["swing"] if racion_row else 0.0,
     }
 
 
@@ -1119,12 +1140,12 @@ def _build_risk_return(data: dict) -> list[dict]:
 # ── Alertas estratégicas ─────────────────────────────────────────────────────
 
 _VAR_LABELS = {
-    "precio_compra": ("precio de compra",   "🛒"),
-    "precio_venta":  ("precio de venta",    "💲"),
-    "precio_maiz":   ("precio del maíz",    "🌽"),
-    "gdp":           ("GDP",                "📈"),
-    "mortandad":     ("mortandad",          "⚠"),
-    "flete":         ("fletes",             "🚛"),
+    "precio_compra": ("precio de compra",            "🛒"),
+    "precio_venta":  ("precio de venta",             "💲"),
+    "precio_racion": ("precio de la ración",         "🌾"),
+    "gdp":           ("GDP",                         "📈"),
+    "mortandad":     ("mortandad",                   "⚠"),
+    "flete":         ("fletes",                      "🚛"),
 }
 
 

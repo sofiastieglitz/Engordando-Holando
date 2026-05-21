@@ -21,7 +21,7 @@ import modules.state.derived as D
 from modules.state.defaults import DEFAULTS
 from modules.state.persist import (
     mirror, reset_to_defaults,
-    get_editor_state, save_editor_state,
+    get_editor_shadow, save_editor_state,
     read,
 )
 from modules.pages.ui import page_header
@@ -186,22 +186,102 @@ def _feed_table_block(table_key: str, *,
         %MS_pond          = consumo_MS_dia / consumo_MV_dia × 100
     """
     editor_key = table_key + "_de"
+    seed_key = "_de_seed_" + table_key   # baseline estable para `data=`
     st.caption("**Composición de la ración** — definí ingredientes y "
                "kg consumidos *tal cual* por animal por día. "
                "Kg MS se calcula automáticamente.")
 
-    # ── Inicialización con migración de esquema ──────────────────────────
-    # `D.migrate_feed_df` dropea cualquier columna "%" legacy, asegura
-    # las 5 columnas canónicas y recalcula Kg MS = Kg TC × %MS/100.
-    stored = get_editor_state(editor_key)
-    if (editor_key not in st.session_state
-            and isinstance(stored, pd.DataFrame)):
-        initial_df = D.migrate_feed_df(stored, rows=10)
-    else:
-        initial_df = _empty_feed_table()
+    # ══════════════════════════════════════════════════════════════════════
+    # ║                                                                   ║
+    # ║  PERSISTENCIA DE LA TABLA DE ALIMENTOS — CÓDIGO CRÍTICO            ║
+    # ║                                                                   ║
+    # ║  ⚠ NO MODIFICAR este bloque sin entender el siguiente contrato.   ║
+    # ║                                                                   ║
+    # ║  Problema histórico nº 1 (bug de navegación):                     ║
+    # ║    Al navegar a otra slide y volver, se perdían los ingredientes  ║
+    # ║    ya cargados.                                                   ║
+    # ║                                                                   ║
+    # ║  Problema histórico nº 2 (bug "se borra apenas tipeo"):           ║
+    # ║    Al editar una celda, el valor recién ingresado se borraba en   ║
+    # ║    el rerun inmediato.                                            ║
+    # ║                                                                   ║
+    # ║  Causa raíz (Streamlit 1.57):                                     ║
+    # ║    `st.data_editor` se registra con                               ║
+    # ║      compute_and_register_element_id(                             ║
+    # ║          "data_editor", user_key=key,                             ║
+    # ║          key_as_main_identity=False, data=arrow_bytes, ...)       ║
+    # ║    O sea: el `element_id` del widget se hashea incluyendo el      ║
+    # ║    CONTENIDO de `data=`. Si entre reruns le cambiamos `data=`,    ║
+    # ║    Streamlit lo considera un widget DISTINTO, el mapper           ║
+    # ║    user_key → element_id se reasigna, y la delta pendiente que    ║
+    # ║    el frontend mandó (la edición del usuario) queda asociada al   ║
+    # ║    element_id viejo → el widget nuevo arranca sin esa delta →    ║
+    # ║    el valor recién tipeado se pierde.                             ║
+    # ║                                                                   ║
+    # ║    El pattern previo (pasar `get_editor_shadow(...)` como         ║
+    # ║    `data=`) gatilla exactamente eso: el shadow se actualiza al    ║
+    # ║    final de cada render → en el siguiente render `data=` cambia  ║
+    # ║    de contenido → element_id muta → delta del usuario perdida.   ║
+    # ║                                                                   ║
+    # ║  Política correcta (NO romper):                                   ║
+    # ║    `data=` debe ser ESTABLE entre reruns dentro de una visita a  ║
+    # ║    la página. Solo se re-siembra cuando el widget fue purgado    ║
+    # ║    por Streamlit (primera sesión, o `editor_key` purgada por     ║
+    # ║    navegación). Detectamos eso por `editor_key not in ss`.       ║
+    # ║                                                                   ║
+    # ║    `data=` vive en `ss[seed_key]`:                                ║
+    # ║      • Al detectar widget purgado → lo cargamos del shadow        ║
+    # ║        (último estado conocido) o de un DF vacío si es la         ║
+    # ║        primera sesión.                                            ║
+    # ║      • Mientras el widget esté vivo NO se toca: la delta del     ║
+    # ║        usuario se aplica encima vía Streamlit, y el `edited`     ║
+    # ║        devuelto contiene siempre el estado correcto.             ║
+    # ║                                                                   ║
+    # ║    `_persist_<editor_key>` (shadow) sigue existiendo, pero su    ║
+    # ║    rol es OTRO: snapshot del último `edited` para que los         ║
+    # ║    consumidores (sidebar, page_costos, etc.) lean el estado      ║
+    # ║    completo, y para re-sembrar el seed cuando el widget vuelva   ║
+    # ║    a aparecer post-navegación. NO se usa como `data=` directo.    ║
+    # ║                                                                   ║
+    # ║  Reglas inviolables:                                              ║
+    # ║    1. `data=` SIEMPRE = `ss[seed_key]` (DataFrame estable).      ║
+    # ║    2. `ss[seed_key]` SOLO se re-asigna cuando                    ║
+    # ║       `editor_key not in ss` (widget purgado).                   ║
+    # ║    3. Al final del render, guardar `edited` completo al shadow   ║
+    # ║       (no al seed).                                              ║
+    # ║    4. NUNCA escribir a `ss[editor_key]` directamente              ║
+    # ║       (Streamlit lo prohíbe).                                     ║
+    # ║                                                                   ║
+    # ║  Cuándo se borra la tabla:                                        ║
+    # ║    Solo cuando el usuario pulsa "↺ Restablecer defaults" →       ║
+    # ║    `reset_to_defaults()` limpia shadow + seed + editor_key.      ║
+    # ║                                                                   ║
+    # ══════════════════════════════════════════════════════════════════════
+
+    # 1) Seed del `data_editor`: baseline ESTABLE entre reruns.
+    #    Solo lo re-sembramos cuando Streamlit purgó el widget
+    #    (primera sesión o vuelta de navegación), detectado por
+    #    `editor_key not in ss`. Mientras el widget esté vivo no se
+    #    toca, así `data=` no cambia de contenido y el `element_id`
+    #    del widget queda estable → la delta del usuario sobrevive.
+    if editor_key not in st.session_state:
+        shadow = get_editor_shadow(editor_key)
+        if shadow is not None:
+            st.session_state[seed_key] = D.migrate_feed_df(shadow, rows=10)
+        else:
+            # Primera sesión absoluta — todavía no hay shadow.
+            st.session_state[seed_key] = _empty_feed_table()
+    elif seed_key not in st.session_state:
+        # Defensa: editor_key existe (widget vivo) pero el seed se perdió
+        # (reset parcial, código viejo, etc.). Reconstruir desde shadow.
+        shadow = get_editor_shadow(editor_key)
+        st.session_state[seed_key] = (
+            D.migrate_feed_df(shadow, rows=10) if shadow is not None
+            else _empty_feed_table()
+        )
 
     edited = st.data_editor(
-        initial_df,
+        st.session_state[seed_key],
         key=editor_key,
         use_container_width=True,
         num_rows="fixed",
@@ -233,7 +313,21 @@ def _feed_table_block(table_key: str, *,
         },
     )
 
-    # Recalcular Kg MS sobre el DataFrame editado y persistir COMPLETO al shadow.
+    # 2) Cierre del ciclo de persistencia: guardar el `edited` completo
+    #    al shadow. El shadow es snapshot del estado actual — sirve para
+    #    (a) consumidores externos (sidebar, page_costos, etc. vía
+    #    `_read_feed_raw`) y (b) re-sembrar el seed la próxima vez que
+    #    el widget reaparezca después de una navegación.
+    #
+    #    ⚠ NO actualizamos el seed acá: si lo hiciéramos, el `data=` del
+    #      próximo rerun cambiaría de contenido → element_id mutaría →
+    #      la delta del usuario se perdería (causa raíz del bug
+    #      "se borra apenas tipeo"). El seed solo se refresca cuando el
+    #      widget es purgado (ver bloque (1) arriba).
+    #
+    #    ⚠ Pasar `edited.copy()` — `edited` puede compartir buffer con
+    #      el state interno de Streamlit; si lo guardáramos por referencia
+    #      y mutáramos columnas más abajo, contaminaríamos la lectura.
     edited = edited.copy()
     kg_tc_col = pd.to_numeric(edited["Kg TC"], errors="coerce").fillna(0.0).clip(lower=0.0)
     pms_col   = pd.to_numeric(edited["%MS"],   errors="coerce").fillna(0.0).clip(lower=0.0, upper=100.0)
