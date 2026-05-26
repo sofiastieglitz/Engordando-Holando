@@ -43,8 +43,11 @@ feedlot holando - backup*/
 /*.xlsx
 /*.xls
 /*.png
-/*.jpe?g
+/*.jpeg
 /*.jpg
+
+# ── Material de referencia (no es código de la app) ───────────────────────────
+Informacion/
 
 # Logs y temporales
 *.log
