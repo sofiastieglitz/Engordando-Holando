@@ -109,8 +109,26 @@ def _num(label: str, key: str, default: float,
         except Exception:
             pass
 
-    # Pre-render: shadow → widget key.
-    st.session_state[widget_key] = cval
+    # Pre-render: sembrar el widget-key SÓLO si está ausente (primera vez,
+    # o tras purga por navegación). NO reescribir en cada rerun.
+    #
+    # ⚠ Por qué (bug "los valores se borran de forma random"):
+    #   Reescribir `ss[widget_key] = cval` en TODOS los reruns pisaba el
+    #   valor recién ingresado por el usuario cuando CUALQUIER otro widget
+    #   (otro campo, la tabla de ración, un checkbox, cambiar de tab)
+    #   disparaba un rerun: el campo volvía al valor viejo del shadow. Como
+    #   dependía de qué se tocara y en qué orden, se percibía como azaroso.
+    #
+    #   Con seed-when-absent, una vez sembrado el widget Streamlit conserva
+    #   el valor del usuario en `ss[widget_key]` entre reruns por sí mismo,
+    #   y el shadow se mantiene en sync vía `on_change` (_sync_back). Ningún
+    #   rerun posterior puede volver a pisar un valor ya ingresado.
+    #
+    #   Persistencia entre slides: al navegar fuera, Streamlit purga el
+    #   widget-key (`_w_<key>`); al volver, `widget_key not in ss` es True y
+    #   se re-siembra desde el shadow vía `read()`. El shadow nunca se purga.
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = cval
 
     st.number_input(
         label,

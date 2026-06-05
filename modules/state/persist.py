@@ -339,5 +339,10 @@ def reset_to_defaults() -> None:
               + list(REPORT_KEYS)):
         ss.pop(k, None)
         ss.pop(_backing(k), None)
+        # Widget-key efímero del patrón seed-when-absent de `_num` y de los
+        # checkboxes de etapas (`_w_<key>`). Hay que borrarlo en el reset:
+        # como el widget sólo se re-siembra cuando `_w_<key>` está ausente,
+        # si quedara con el valor viejo el campo NO volvería al default.
+        ss.pop("_w_" + k, None)
     for k in SEED_KEYS:
         ss.pop(k, None)
